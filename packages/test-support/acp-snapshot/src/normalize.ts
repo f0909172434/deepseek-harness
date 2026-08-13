@@ -184,6 +184,59 @@ function scrubValue(value: unknown, ctx: NormalizeContext, cwdPathMode: CwdPathM
   return value
 }
 
+/** The rendered wall clock in a time-context reading's first line (offset + IANA zone). */
+const TIME_READING_TIMESTAMP_RE = new RegExp(
+  String.raw`(^Time sampled while preparing turn \d+, step \d+: )\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}`
+  + String.raw`(?:Z|[+-]\d{2}:\d{2})\[[^\]]+\](\n)`,
+  'gm',
+)
+/** The rendered elapsed duration in a time-context reading's last line. */
+const TIME_READING_ELAPSED_RE = new RegExp(
+  String.raw`(^Elapsed since the preceding (?:model-visible message|step context): )`
+  + String.raw`(?:unavailable|(?:(?:\d+d )?(?:\d+h )?(?:\d+m )?\d+s))(\.$)`,
+  'gm',
+)
+
+/**
+ * Tokenize the wall-clock fields of a durable time-context reading. The
+ * timestamp and the elapsed duration are run-time state like an event `time`;
+ * the turn/step position, browser-zone policy, and baseline stay verbatim so a
+ * fixture still pins the reading's structure.
+ * @param record - one parsed session-log record; non-time-context records pass through unchanged.
+ * @returns the record with reading text fields tokenized in place.
+ */
+function scrubTimeContextReading(record: Record<string, unknown>): Record<string, unknown> {
+  if (record.type !== 'user/message') return record
+  const data = record.data
+  if (data === null || typeof data !== 'object') return record
+  const dataRecord = data as Record<string, unknown>
+  const source = dataRecord.source
+  if (source === null || typeof source !== 'object'
+    || (source as Record<string, unknown>).plugin !== 'time-context') return record
+  const scrub = (text: unknown): unknown => typeof text === 'string'
+    ? text
+      .replace(TIME_READING_TIMESTAMP_RE, '$1{{timeReadingTimestamp}}$2')
+      .replace(TIME_READING_ELAPSED_RE, '$1{{timeReadingElapsed}}$2')
+    : text
+  const content = dataRecord.content
+  if (Array.isArray(content)) {
+    for (const block of content) {
+      if (block !== null && typeof block === 'object' && 'text' in block) {
+        (block as Record<string, unknown>).text = scrub((block as Record<string, unknown>).text)
+      }
+    }
+  }
+  const sections = (source as Record<string, unknown>).sections
+  if (Array.isArray(sections)) {
+    for (const section of sections) {
+      if (section !== null && typeof section === 'object' && 'text' in section) {
+        (section as Record<string, unknown>).text = scrub((section as Record<string, unknown>).text)
+      }
+    }
+  }
+  return record
+}
+
 /** Escape one literal path segment for use in a regular expression. */
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
@@ -324,7 +377,7 @@ export function normalizeSessionLog(
         if ('durationMs' in data) data.durationMs = 0
       }
     }
-    return scrubValue(record, ctx, cwdPathMode) as Record<string, unknown>
+    return scrubValue(scrubTimeContextReading(record), ctx, cwdPathMode) as Record<string, unknown>
   })
   return records.map(r => JSON.stringify(r)).join('\n') + '\n'
 }

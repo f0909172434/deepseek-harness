@@ -2,7 +2,7 @@
 
 English | [中文](README.zh.md)
 
-Product plugins that add model-visible request context without defining a tool. `agent-instructions` is included by the default `dsh-agent-spine-demo` bundle and can be disabled through bundle config; `time-context`, `tmux-context`, and `session-reference` are opt-in.
+Product plugins that add model-visible request context without defining a tool. `agent-instructions` is included by the default `dsh-agent-spine-demo` bundle and can be disabled through bundle config; `time-context` is mounted by the dsh-base bundle of every shipped profile and can be disabled or reconfigured by id; `tmux-context` and `session-reference` are opt-in.
 
 | Package | Role | ctx key |
 |---|---|---|

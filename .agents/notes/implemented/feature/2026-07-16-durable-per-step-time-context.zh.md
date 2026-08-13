@@ -12,7 +12,7 @@ Status: implemented
 
 ## 决策
 
-`@deepseek-ai/dsh-time-context` 是位于 `packages/context/time-context/`、需要显式启用的函数插件。默认组合不启用其披露内容与 token 成本；Schedule Web overlay 会挂载它，使模型能够按附加到当前请求的浏览器时区解释未明确限定时区的日期和时间。
+`@deepseek-ai/dsh-time-context` 是位于 `packages/context/time-context/` 的函数插件。dsh-base 组合包以 `refreshIntervalMs: 60000` 为每个交付 profile 默认挂载它；Schedule Web overlay 会清空该间隔，使模型能够按附加到每个请求步骤的浏览器时区解释未明确限定时区的日期和时间。默认挂载及其依据见 [default-time-context Agent Note](2026-08-13-default-time-context.md)，它逆转了下方记录的最初 opt-in 立场。
 
 该插件会前置一个 `agent/pre-step` 监听器，并先行委托下游。当下游决策进入步骤且需要生成读数时，插件会把该决策的最终消息与开放轮次中已有的持久用户消息合并，从确切的 user-rpc 来源派生浏览器时区来源信息，并向该决策追加一条读数。决策被拒绝、监听器失败或信号已经中止时，不会记录任何内容。在当前批次之后被认领的 steering（中途引导）仍归属于普通的下一步骤，并在该步骤进入时获得新读数。
 
@@ -60,7 +60,7 @@ Elapsed since the preceding step context: <duration-or-unavailable>.
 - **让 Schedule 隐式消费读数**：不予采纳，因为自然语言上下文不是稳定的类型化默认值，而且这会把绝对时间解析器耦合到 AgentLoop 历史。模型会改为传入显式偏移量或时区。
 - **只使用进程时区**：不予采纳，因为部署所在地无法推断远程用户的时区。请求来源信息缺失或混杂时，它仍可作为显示回退值。
 - **只通过工具提供时间**：不予采纳，因为普通时间推理会产生本可避免的往返，也无法确保每个步骤之前都有读数。
-- **默认挂载 time-context**：不予采纳，因为披露内容、新鲜度与历史成本仍属于组合策略。
+- **默认挂载 time-context**：最初不予采纳，因为披露内容、新鲜度与历史成本仍属于组合策略；[default-time-context Agent Note](2026-08-13-default-time-context.md) 后来以 60 秒刷新间隔为交付 profile 逆转了这一决定。
 
 ## 验证
 

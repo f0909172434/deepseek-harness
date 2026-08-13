@@ -1,9 +1,12 @@
 # Opt-in Schedule patch over the shipped Web composition. The owner observes
 # only roots published after this overlay loads.
 
-- insert:
-    - id: time-context
-      name: '@deepseek-ai/dsh-time-context'
+# The base bundle already mounts time-context with a minute-long refresh
+# interval; clearing the config keeps the reading on every request step so
+# each reminder gets current browser guidance.
+- id: time-context
+  config: {}
 
+- insert:
     - id: schedule
       name: '@deepseek-ai/dsh-schedule'

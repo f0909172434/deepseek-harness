@@ -2,7 +2,7 @@
 
 English | [中文](README.zh.md)
 
-Opt-in durable context with the current zoned time, the browser zone attached to the open request, and elapsed time sampled during model-request preparation. Default compositions leave it disabled; the Schedule Web overlay mounts it so the model can interpret otherwise-unqualified dates and times in the user's browser zone. Decision record: [the durable time-context Agent Note](../../../.agents/notes/implemented/feature/2026-07-16-durable-per-step-time-context.md).
+Durable context with the current zoned time, the browser zone attached to the open request, and elapsed time sampled during model-request preparation. Every shipped dsh profile mounts it through the dsh-base bundle with a 60-second refresh interval, so the model's clock stays current without one reading per tool call; the Schedule Web overlay clears the interval, and any composition can disable or reconfigure the row by id. Decision records: [the durable time-context Agent Note](../../../.agents/notes/implemented/feature/2026-07-16-durable-per-step-time-context.md) and [the default-mount Agent Note](../../../.agents/notes/implemented/feature/2026-08-13-default-time-context.md).
 
 ## Config
 
@@ -16,7 +16,7 @@ Opt-in durable context with the current zoned time, the browser zone attached to
 
 When the open turn contains one Host-validated browser zone, that request-local zone formats the timestamp. With missing or mixed browser provenance, `timeZone` supplies the display fallback; omitting it resolves the Node process zone once at plugin load. Node honors `TZ`, and every explicit fallback is validated through `Intl.DateTimeFormat`.
 
-`refreshIntervalMs` must be a non-negative safe integer. Omission or `0` adds context to every eligible entering pre-step whose signal is not already aborted. A positive value adds it only when the Session has no earlier time-context injection, wall time moved backward, or at least that many milliseconds elapsed since the latest injection.
+`refreshIntervalMs` must be a non-negative safe integer. Omission or `0` adds context to every eligible entering pre-step whose signal is not already aborted. A positive value adds it only when the Session has no earlier time-context injection, wall time moved backward, or at least that many milliseconds elapsed since the latest injection. The shipped dsh-base row sets `60000`.
 
 ## Request-zone ownership
 

@@ -409,6 +409,122 @@ describe('normalizeSessionLog', () => {
   })
 })
 
+describe('time-context reading scrubbing', () => {
+  const header = JSON.stringify({ type: 'session', version: 0, id: 's', createdAt: 123 })
+  const readingText = [
+    'Time sampled while preparing turn 2, step 3: 2026-08-13T09:41:07+08:00[Asia/Shanghai]',
+    'Browser time zone for this request: Asia/Shanghai. Interpret otherwise-unqualified dates and times in this zone.',
+    'Elapsed since the preceding step context: 1m 4s.',
+  ].join('\n')
+  const timeContextEvent = (text: unknown) => JSON.stringify({
+    type: 'user/message',
+    seq: 9,
+    time: 5,
+    data: {
+      content: [{ type: 'text', text }],
+      source: {
+        kind: 'plugin',
+        plugin: 'time-context',
+        form: 'snapshot',
+        sections: [{ name: 'time-context', text }],
+      },
+    },
+  })
+
+  it('tokenizes the rendered timestamp and elapsed duration in content and snapshot sections', () => {
+    const out = normalizeSessionLog(`${header}\n${timeContextEvent(readingText)}\n`, ctx)
+    expect(out).toContain(
+      '"Time sampled while preparing turn 2, step 3: {{timeReadingTimestamp}}\\n'
+      + 'Browser time zone for this request: Asia/Shanghai. Interpret otherwise-unqualified dates and times in this zone.\\n'
+      + 'Elapsed since the preceding step context: {{timeReadingElapsed}}."',
+    )
+    expect(out).not.toContain('2026-08-13')
+    expect(out).not.toContain('1m 4s')
+  })
+
+  it('tokenizes an unavailable elapsed baseline', () => {
+    const text = 'Time sampled while preparing turn 1, step 1: 2026-08-13T09:41:07Z[UTC]\n'
+      + 'Browser time zone for this request: unavailable. Ask the user to clarify otherwise-unqualified dates and times.\n'
+      + 'Elapsed since the preceding model-visible message: unavailable.'
+    const out = normalizeSessionLog(`${header}\n${timeContextEvent(text)}\n`, ctx)
+    expect(out).toContain('{{timeReadingTimestamp}}')
+    expect(out).toContain('Elapsed since the preceding model-visible message: {{timeReadingElapsed}}')
+    expect(out).not.toContain('2026-08-13')
+  })
+
+  it('leaves other messages byte-identical in their text fields', () => {
+    const ev = JSON.stringify({
+      type: 'user/message', seq: 3, time: 5,
+      data: {
+        content: [{ type: 'text', text: 'Time sampled while preparing turn 1, step 1: kept as authored prose.' }],
+        source: { kind: 'plugin', plugin: 'schedule' },
+      },
+    })
+    const out = normalizeSessionLog(`${header}\n${ev}\n`, ctx)
+    expect(out).toContain('kept as authored prose.')
+  })
+
+  it('leaves non-string text fields unchanged', () => {
+    const ev = JSON.stringify({
+      type: 'user/message', seq: 4, time: 5,
+      data: { content: [{ type: 'text', text: 42 }], source: { kind: 'plugin', plugin: 'time-context' } },
+    })
+    const out = normalizeSessionLog(`${header}\n${ev}\n`, ctx)
+    expect(out).toContain('"text":42')
+  })
+
+  it('tolerates a time-context record without content or section arrays', () => {
+    const ev = JSON.stringify({
+      type: 'user/message', seq: 5, time: 5,
+      data: { source: { kind: 'plugin', plugin: 'time-context' } },
+    })
+    const out = normalizeSessionLog(`${header}\n${ev}\n`, ctx)
+    expect(out).toContain('"seq":5')
+  })
+
+  it('leaves user messages with non-object data unchanged', () => {
+    const nullData = JSON.stringify({ type: 'user/message', seq: 6, time: 5, data: null })
+    const primitiveData = JSON.stringify({ type: 'user/message', seq: 7, time: 5, data: 'oops' })
+    const out = normalizeSessionLog(`${header}\n${nullData}\n${primitiveData}\n`, ctx)
+    expect(out).toContain('"data":null')
+    expect(out).toContain('"data":"oops"')
+  })
+
+  it('leaves time-context messages whose source is not an object unchanged', () => {
+    const nullSource = JSON.stringify({
+      type: 'user/message', seq: 8, time: 5,
+      data: { content: [], source: null },
+    })
+    const primitiveSource = JSON.stringify({
+      type: 'user/message', seq: 9, time: 5,
+      data: { content: [], source: 'oops' },
+    })
+    const out = normalizeSessionLog(`${header}\n${nullSource}\n${primitiveSource}\n`, ctx)
+    expect(out).toContain('"source":null')
+    expect(out).toContain('"source":"oops"')
+  })
+
+  it('scrubs only conforming content and section entries', () => {
+    const ev = JSON.stringify({
+      type: 'user/message', seq: 10, time: 5,
+      data: {
+        content: [null, 'oops', { type: 'text' }, { type: 'text', text: readingText }],
+        source: {
+          kind: 'plugin',
+          plugin: 'time-context',
+          sections: [null, 'oops', { name: 'time-context' }, { name: 'time-context', text: readingText }],
+        },
+      },
+    })
+    const out = normalizeSessionLog(`${header}\n${ev}\n`, ctx)
+    expect(out).toContain('{{timeReadingTimestamp}}')
+    expect(out).toContain('null')
+    expect(out).toContain('"oops"')
+    expect(out).toContain('{"type":"text"}')
+    expect(out).toContain('{"name":"time-context"}')
+  })
+})
+
 describe('tokenizeSessionFixtureCwd', () => {
   it.each([
     {

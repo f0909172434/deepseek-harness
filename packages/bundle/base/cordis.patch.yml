@@ -58,6 +58,17 @@
     - id: agent
       name: '@deepseek-ai/dsh-agent'
 
+    # Every mode tells the model the current time before an entering step when
+    # no reading exists or the latest one is at least a minute old, so
+    # date-sensitive reasoning (for example web_search query years) matches the
+    # deployment clock without one reading per tool call. Web prompts override
+    # the display zone with their Host-validated browser zone; the Schedule
+    # overlay clears the interval so every request step gets fresh guidance.
+    - id: time-context
+      name: '@deepseek-ai/dsh-time-context'
+      config:
+        refreshIntervalMs: 60000
+
     # The transport-independent default for Agents created by entry points.
     # Settings may supply a saved selection; consumers read it at creation time.
     - id: agent-default-model

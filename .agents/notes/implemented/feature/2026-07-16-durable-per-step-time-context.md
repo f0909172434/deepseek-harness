@@ -12,7 +12,7 @@ A process-local refresh cache makes displayed time depend on state that cannot s
 
 ## Decision
 
-`@deepseek-ai/dsh-time-context` is an opt-in function plugin in `packages/context/time-context/`. Default compositions leave its disclosure and token cost disabled; the Schedule Web overlay mounts it so the model can interpret otherwise-unqualified dates and times in the browser zone attached to the current request.
+`@deepseek-ai/dsh-time-context` is a function plugin in `packages/context/time-context/`. The dsh-base bundle mounts it by default with `refreshIntervalMs: 60000` for every shipped profile; the Schedule Web overlay clears the interval so the model interprets otherwise-unqualified dates and times in the browser zone attached to each request step. The default mount and its rationale are [the default-time-context Agent Note](2026-08-13-default-time-context.md), which reversed the original opt-in stance recorded below.
 
 The plugin prepends an `agent/pre-step` listener and delegates first. When the downstream decision enters and a reading is due, it combines that decision's final messages with durable user messages already in the open turn, derives browser-zone provenance from exact `user-rpc` sources, and appends one reading to the decision. Rejection, listener failure, or an already-aborted signal records nothing. Steering claimed after the current batch keeps ordinary next-step ownership and receives a fresh reading when that step enters.
 
@@ -60,7 +60,7 @@ The plugin contributes nothing to system-prompt assembly or `request/header`. Re
 - **Let Schedule consume the reading implicitly** — rejected because prose context is not a stable typed default and would couple an absolute-time parser to AgentLoop history. The model instead passes an explicit offset or zone.
 - **Use only the process zone** — rejected because deployment locality cannot infer a remote user's zone. It remains a display fallback when request provenance is absent or mixed.
 - **Expose time only through a tool** — rejected because ordinary temporal reasoning would require an avoidable round trip and would not ensure a reading before each step.
-- **Mount time-context by default** — rejected because disclosure, freshness, and history cost remain composition policy.
+- **Mount time-context by default** — initially rejected because disclosure, freshness, and history cost remained composition policy; the [default-time-context Agent Note](2026-08-13-default-time-context.md) later reversed this for shipped profiles with a 60-second refresh interval.
 
 ## Verification
 
