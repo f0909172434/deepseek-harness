@@ -155,24 +155,29 @@ interface WebRuntime {
 
 ## 搜索请求与结果 schema
 
-面向模型的 `web_search` 工具很小。唯一的面向模型参数是：
+面向模型的 `web_search` 工具有两个参数：
 
 - `query`：必填字符串。
+- `allowed_domains`：可选的允许列表，包含一至 20 个不带其他部分的 ASCII DNS 主机名。每项允许精确主机及其子域名；协议、路径、凭证、端口、通配符、IP 字面量与 Unicode 主机名会被拒绝。
 
 `max_results` 不暴露给模型。它是 `dsh-tool-web` 层的决策：工具设定结果上限——`searchMaxResults` 插件配置，默认 `8`（与 OpenCode 的 Exa 默认值对齐），类似 `dsh-tool-fs` 的 `readLimit`——并作为 `WebSearchRequest` 上的 `maxResults` 传给 seam。将其排除在模型 schema 之外意味着模型只需提问，产品控制返回多少上下文；该字段日后可以提升为面向模型的参数而不破坏 seam。
 
-`maxResults` 沿工具 → seam → 提供方流动，上限在返回路径上强制执行：
+`dsh-tool-web` 将 `allowed_domains` 映射为 `WebSearchRequest.allowedDomains`。`ctx.web` 验证列表，按首次出现顺序将各项转为小写并去重，然后把规范化请求发送给选定的提供方。DeepSeek 将其映射为原生 `allowed_domains`，Exa 映射为 `includeDomains`，Perplexity 映射为 `search_domain_filter`。提供方返回后，`ctx.web` 会先按允许列表检查每个结构化来源 URL，再应用 `maxResults`；格式错误、非 HTTP(S) 或超出范围的 URL 会使整个搜索以 `WEB_SEARCH_FILTER_VIOLATION` 失败。seam 不会静默丢弃来源，因为提供方生成的 `content` 可能已引用或依赖该来源。
+
+`maxResults` 沿工具 → seam → 提供方流动，并在返回路径的域名检查之后强制执行上限：
 
 - `dsh-tool-web` 拥有该值并将其放在 `WebSearchRequest.maxResults` 上。
-- `ctx.web` 将请求原样传递给选定的提供方。
+- `ctx.web` 将请求连同任何规范化的 `allowedDomains` 发送给选定的提供方。
 - 当提供方的 API 支持结果数量控制时（Exa 的 `numResults`），提供方在请求层应用 `maxResults`，作为成本/延迟优化。
 - `ctx.web` 在结果上强制执行上限：如果提供方返回的 source 数量超过 `maxResults`——因为其 API 没有结果数量控制（Perplexity）或忽略了提示——seam 将 `sources[]` 截断到 `maxResults` 并在返回前将 `WebSearchResult.truncated` 设为 `true`。这使上限成为面向模型层可以依赖的单一跨提供方保证，而非每个提供方都必须记得遵守的东西。
 
-seam 请求不携带提供方特有的控制——没有 Perplexity 模型选择、搜索时效性、域名过滤器、Exa `livecrawl`、Exa `type`、区域提示、生成式回答预算或搜索深度。只有当某个字段具有提供方无关的语义，且工具 schema 和选定的提供方都能诚实地遵守时，才会添加。
+seam 请求不携带提供方特有的控制——没有 Perplexity 模型选择、搜索时效性、域名阻止列表、Exa `livecrawl`、Exa `type`、区域提示、生成式回答预算或搜索深度。`allowedDomains` 得以加入，是因为每个选定的提供方都有原生允许列表映射，且 seam 自身可以强制检查返回的结构化来源。只有当其他字段具有提供方无关的语义，且工具 schema、选定的提供方与 seam 都能诚实遵守时，才会添加。
 
 ```ts
 interface WebSearchRequest {
   readonly query: string
+  /** ASCII hostnames whose exact host and subdomains may appear in results. */
+  readonly allowedDomains?: readonly string[]
   /** Upper bound on returned sources; the seam truncates to it. Omitted = no bound. `dsh-tool-web` always sets it. */
   readonly maxResults?: number
 }
@@ -187,11 +192,12 @@ interface WebSearchSource {
   readonly url: string
   readonly title?: string
   readonly snippet?: string
+  /** Provider-supplied publication, crawl, or page-age label; format varies. */
   readonly publishedAt?: string
 }
 ```
 
-`content` 是可选的提供方生成的回答文本、搜索上下文或摘要。`sources[]` 是可移植的引用结构。source 必有 URL；title、snippet 和 `publishedAt` 可选，因为并非每个提供方都返回它们。`title` 不是必填：Perplexity 风格的引用可能只提供 URL，强制适配器编造标题会让 seam 说谎。`dsh-tool-web` 渲染 `title ?? hostname(url)` 风格的回退标签用于展示。`publishedAt` 是可选的发布/抓取时间戳，为 ISO-8601 字符串——Exa 在每条结果上以 `publishedDate` 返回它，Perplexity 在搜索结果上返回 `date`，因此它是真实的提供方数据而非派生值；seam 以字符串形式传递，日期解析留给消费方。
+`content` 是可选的提供方生成回答文本、搜索上下文或摘要。`sources[]` 是可移植的引用结构。source 必有 URL；title、snippet 和 `publishedAt` 可选，因为并非每个提供方都返回它们。`title` 不是必填：Perplexity 风格的引用可能只提供 URL，强制适配器编造标题会让 seam 说谎。`dsh-tool-web` 渲染 `title ?? hostname(url)` 风格的回退标签用于展示。`publishedAt` 携带提供方给出的发布时间、抓取时间或页面年龄标签。Exa 提供 `publishedDate`，Perplexity 提供 `date`，DeepSeek 提供 `page_age`；seam 保留该字符串，但不承诺它是 ISO-8601，也不承诺可跨提供方比较。
 
 Exa 搜索将提供方扁平 `results[]` 的每一项映射为 `WebSearchSource`：`url` ← `url`、`title` ← `title`、`snippet` ← 第一个 `highlights[]` 条目（没有 highlight 的条目没有可移植的 snippet，被丢弃）、`publishedAt` ← `publishedDate`。Exa 不返回提供方生成的回答，因此 `content` 省略。Perplexity 搜索将 `choices[0].message.content` 映射为 `content`，并优先使用结构化的顶层 `search_results[]` 作为 `sources[]`——`url` ← `url`、`title` ← `title`、`snippet` ← `snippet`（常为空）、`publishedAt` ← `date`——仅在 `search_results` 缺失时回退到纯 URL 的 `citations[]` 数组（这些 source 只有 `url`）。如果提供方返回的结构化字段少于 seam 支持的，适配器省略那些可选字段。
 
@@ -265,6 +271,8 @@ SSRF/私有网络防护（阻断私有、回环、链路本地、多播及其他
 - `WEB_PROVIDER_CONFIGURED_UNAVAILABLE`
 - `WEB_PROVIDER_AMBIGUOUS`
 - `WEB_DUPLICATE_PROVIDER`
+- `WEB_INVALID_SEARCH_FILTER`
+- `WEB_SEARCH_FILTER_VIOLATION`
 - `WEB_INVALID_URL`
 - `WEB_BLOCKED_URL`
 - `WEB_REDIRECT_BLOCKED`
@@ -274,13 +282,13 @@ SSRF/私有网络防护（阻断私有、回环、链路本地、多播及其他
 - `WEB_UNSUPPORTED_CONTENT_TYPE`
 - `WEB_PROVIDER_ERROR`
 
-`WEB_DUPLICATE_PROVIDER` 在 `registerSearchProvider`/`registerFetchProvider` 发现该能力类别中已有相同 id 时同步抛出（类似 `LlmRuntime` 的 `DUPLICATE_ADAPTER`）；它是注册时的编程错误而非执行结果，但共享 `WebError` 码空间，使调用方看到统一的分类体系。`WEB_PROVIDER_ERROR` 是提供方自身失败通过 seam 浮出的兜底码，包括 `web-fetch-http` 中的网络/传输失败（DNS、连接拒绝、TLS）；刻意不设单独的 `WEB_NETWORK` 码——提供方设置描述性消息，使模型和日志能区分网络失败与提供方 API 失败。
+`WEB_DUPLICATE_PROVIDER` 在 `registerSearchProvider`/`registerFetchProvider` 发现该能力类别中已有相同 id 时同步抛出（类似 `LlmRuntime` 的 `DUPLICATE_ADAPTER`）；它是注册时的编程错误而非执行结果，但共享 `WebError` 码空间，使调用方看到统一的分类体系。`WEB_INVALID_SEARCH_FILTER` 会在提供方发出请求前拒绝无效的 `allowedDomains` 请求。`WEB_SEARCH_FILTER_VIOLATION` 会拒绝结构化来源列表违反规范化允许列表的提供方结果。`WEB_PROVIDER_ERROR` 是提供方自身失败通过 seam 浮出的兜底码，包括 `web-fetch-http` 中的网络/传输失败（DNS、连接拒绝、TLS）；刻意不设单独的 `WEB_NETWORK` 码——提供方设置描述性消息，使模型和日志能区分网络失败与提供方 API 失败。
 
 工具执行让这些错误流经 `ToolRuntime.execute()`，后者已将 `HarnessError` 转换为带结构化元数据的错误工具结果。模型得到可读的错误消息；钩子、测试和 UI 代码可以根据稳定的错误码路由。
 
 ## 测试
 
-每一层在自己的边界处固定：`dsh-web` 中的注册/选择/截断/abort 约定与 `WebError` 码；每个提供方基于录制的 fixture（测试前置数据）的请求/响应映射（Perplexity fixture 包含纯 URL 引用，以保持可选 source 字段的诚实性），加上每个真实提供方的自跳过带密钥冒烟测试；`web-fetch-http` 中的真实本地 HTTP 行为；`dsh-tool-web` 中通过真实工具注册表的启用驱动注册、结构化执行错误和结果格式化。一个真实 Loader 冒烟测试守护两种导出形状（[事故复盘（postmortem） 0001](../../../../docs/postmortem/0001-acp-default-export-drops-inject.md)）：`dsh-web` 是默认导出的服务，而提供方和 `tool-web` 是命名空间插件，误加 `export default` 会丢失 `inject`。
+每一层在自己的边界处固定：`dsh-web` 中的注册/选择、`allowedDomains` 规范化、截断前的来源 fail-loud 检查、abort 行为与 `WebError` 码；每个提供方的原生允许列表请求映射和基于录制 fixture（测试前置数据）的响应映射（Perplexity fixture 包含纯 URL 引用，以保持可选 source 字段的诚实性），加上每个真实提供方的自跳过带密钥冒烟测试；`web-fetch-http` 中的真实本地 HTTP 行为；`dsh-tool-web` 中通过真实工具注册表的模型参数映射、启用驱动注册、结构化执行错误和结果格式化。无密钥的 web 应用快照通过真实组合执行一次 `allowed_domains` 调用，并记录 DeepSeek 辅助请求。一个真实 Loader 冒烟测试守护两种导出形状（[事故复盘（postmortem） 0001](../../../../docs/postmortem/0001-acp-default-export-drops-inject.md)）：`dsh-web` 是默认导出的服务，而提供方和 `tool-web` 是命名空间插件，误加 `export default` 会丢失 `inject`。
 
 ## 曾考虑的替代方案
 
@@ -310,7 +318,9 @@ SSRF/私有网络防护（阻断私有、回环、链路本地、多播及其他
 
 ## 后果
 
-**搜索 schema 刻意精简。** Exa 和 Perplexity 都暴露了有用的提供方特有控制；只有当某个控制能以提供方无关的方式定义、且工具注册和提供方执行都能诚实遵守时，才会添加。
+**搜索 schema 刻意精简。** `allowed_domains` 是唯一已提升的搜索控制，因为 DeepSeek、Exa 与 Perplexity 都能原生映射它，且 seam 可以拒绝不符合要求的结构化来源。其他有用的提供方控制仍保持缺席，直到工具注册、提供方执行和 seam 都能以提供方无关的方式诚实执行。
+
+**域名允许列表是严格的结构化结果约定，不是新近程度保证。** 它请求提供方侧限制，并通过 seam 验证约束返回的结构化来源 URL。它不能证明每个内部检索候选或生成文本只使用允许的证据，也不会使提供方给出的日期变得可比较或证明声明仍为当前事实，因此新近程度仍依赖带日期的查询与证据导向提示词。
 
 **Perplexity 引用可能稀疏。** 一条引用可能只有 URL。将 `title` 和 `snippet` 设为可选使 seam 保持诚实，但意味着 `tool-web` 需要渲染回退标签。
 
@@ -330,7 +340,7 @@ SSRF/私有网络防护（阻断私有、回环、链路本地、多播及其他
 - `pdf` `WebFetchBody` 类别：`http` 提供方将可文本提取的 PDF 解码（尽力而为、有上限、`truncated`）为 `{ kind: 'pdf'; content; pageCount? }` 分支，`tool-web` 渲染它。这是 fetch 而非 `web_extract`——PDF 获取是具体的 HTTP 200 加确定性的本地解码，不是提供方侧对非 HTTP 资源的提取。添加它是跨 `dsh-web`（声明分支）、提供方（解码 + 将「二进制拒绝」收窄为「拒绝二进制，但可文本提取的 PDF 除外」；需要 OCR 的扫描/图片 PDF 不在范围内）和 `tool-web`（渲染）的协调变更。封闭的 `WebFetchBody` 联合类型使消费方在新分支被处理之前编译失败。
 - 提供方支撑的提取作为独立的 `web_extract` 能力，而非静默扩展 `web_fetch`。
 - 权限策略集成：权限系统现已存在（[沙箱与审批](../feature/2026-07-06-sandbox.md)、[web 权限预设](../feature/2026-07-23-web-permission-and-approval.md)），但只捆绑了沙箱模式与审批策略；web 权限策略仍未集成。
-- `query` 和 `maxResults` 之外的提供方无关搜索控制，待 Exa 和 Perplexity 都能诚实遵守时再添加。
+- `query`、`allowedDomains` 和 `maxResults` 之外的提供方无关搜索控制，例如新近程度或域名阻止列表，待每个选定的提供方与 seam 都能诚实执行时再添加。
 
 ## 开放问题
 

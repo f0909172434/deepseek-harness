@@ -12,16 +12,19 @@ Search and fetch share no request schema and no business logic, but they are del
 
 ## Search request and result
 
-The model-facing tool argument is just a `query`; `maxResults` is a consumer-owned bound (`dsh-tool-web`'s `searchMaxResults` config, default `8`) passed through the seam and enforced on the way back — if a provider over-returns, the seam truncates `sources[]` and sets `truncated`.
+The model-facing tool accepts a required `query` and an optional `allowed_domains` allowlist. When present, `allowed_domains` contains 1–20 bare ASCII hostnames: no scheme, path, credentials, port, wildcard, IP literal, surrounding whitespace, or single-label host. An entry matches that exact hostname and its subdomains. `dsh-tool-web` maps it to the portable `allowedDomains` field; `maxResults` remains a consumer-owned bound (`searchMaxResults`, default `8`) rather than a model argument.
 
 ```ts type-equiv
 /**
- * What one search-capable backend can return. The model-facing argument is just
- * a query; `maxResults` is a `dsh-tool-web`-layer bound passed through unchanged
- * and enforced on the way back by the seam (see {@link WebSearchResult}).
+ * What one search-capable backend is asked to retrieve. `allowedDomains` has
+ * provider-neutral allowlist semantics; `maxResults` is a `dsh-tool-web`-layer
+ * bound passed through unchanged and enforced on the way back by the seam (see
+ * {@link WebSearchResult}).
  */
 interface WebSearchRequest {
   readonly query: string
+  /** ASCII hostnames whose exact host and subdomains may appear in results. */
+  readonly allowedDomains?: readonly string[]
   /**
    * Upper bound on returned sources; the seam truncates to it. Omitted = no
    * bound. `dsh-tool-web` always sets it. A provider whose API supports a
@@ -62,10 +65,14 @@ interface WebSearchSource {
   readonly url: string
   readonly title?: string
   readonly snippet?: string
-  /** Publication/crawl timestamp as a provider-supplied ISO-8601 string. */
+  /** Provider-supplied publication, crawl, or page-age label; format varies. */
   readonly publishedAt?: string
 }
 ```
+
+The seam lowercases `allowedDomains`, collapses exact duplicates in first-seen order, and rejects an invalid or empty list before provider dispatch. Each provider receives the same portable restriction through its native request field: DeepSeek's `web_search_20250305.allowed_domains`, Exa's `includeDomains`, or Perplexity's `search_domain_filter`. After a provider returns, the seam requires every structured source to use HTTP(S) and match the allowlist before it applies `maxResults`; one violating source fails the complete search instead of being silently removed, because provider-generated `content` may already refer to it. The allowlist constrains source scope, not publication recency, and cannot by itself prove that a mutable claim is current.
+
+`publishedAt` is an opaque provider label: Exa maps `publishedDate`, Perplexity maps `date`, and DeepSeek maps `page_age`. It may denote publication, crawl, last-update, or page age; it is not guaranteed to be ISO-8601 or comparable across providers, so consumers must not treat the field alone as a freshness guarantee.
 
 ## Fetch request and result
 
@@ -125,11 +132,11 @@ Selection never depends on registration, config, or HMR order: a capability has 
 
 ## Errors
 
-`WebError extends HarnessError` ([core.md](core.md) error taxonomy) with a `code: string` (open, like every other seam's error — `LlmError`, `SubagentError`), not a closed union: a provider may raise its own codes without editing `dsh-web`, and consumers must tolerate an unknown code. The codes split by owner. Seam-neutral codes are raised by the shared `WebRuntime` contract: `WEB_PROVIDER_UNAVAILABLE`, `WEB_PROVIDER_CONFIGURED_MISSING`, `WEB_PROVIDER_CONFIGURED_UNAVAILABLE`, `WEB_PROVIDER_AMBIGUOUS`, `WEB_DUPLICATE_PROVIDER` (a registration-time programming error, the analogue of `LlmRuntime`'s `DUPLICATE_ADAPTER`), `WEB_ABORTED`, and `WEB_PROVIDER_ERROR` (the catch-all for a provider's own failure surfaced through the seam, including network/transport failure — DNS, connection refused, TLS). Fetch-transport codes are owned by the `dsh-web-fetch-http` implementation and a different fetch backend need not raise them: `WEB_INVALID_URL`, `WEB_BLOCKED_URL`, `WEB_REDIRECT_BLOCKED`, `WEB_FETCH_TOO_LARGE`, `WEB_FETCH_TIMEOUT`, `WEB_UNSUPPORTED_CONTENT_TYPE`.
+`WebError extends HarnessError` ([core.md](core.md) error taxonomy) with a `code: string` (open, like every other seam's error — `LlmError`, `SubagentError`), not a closed union: a provider may raise its own codes without editing `dsh-web`, and consumers must tolerate an unknown code. The codes split by owner. Shared `WebRuntime` codes are `WEB_PROVIDER_UNAVAILABLE`, `WEB_PROVIDER_CONFIGURED_MISSING`, `WEB_PROVIDER_CONFIGURED_UNAVAILABLE`, `WEB_PROVIDER_AMBIGUOUS`, `WEB_DUPLICATE_PROVIDER` (a registration-time programming error, the analogue of `LlmRuntime`'s `DUPLICATE_ADAPTER`), `WEB_INVALID_SEARCH_FILTER` (an invalid portable allowlist), and `WEB_SEARCH_FILTER_VIOLATION` (a returned structured source falls outside that allowlist). `WEB_ABORTED` and `WEB_PROVIDER_ERROR` surface provider execution failures, the latter including network or transport failure such as DNS, connection refusal, or TLS. Fetch-transport codes are owned by the `dsh-web-fetch-http` implementation and a different fetch backend need not raise them: `WEB_INVALID_URL`, `WEB_BLOCKED_URL`, `WEB_REDIRECT_BLOCKED`, `WEB_FETCH_TOO_LARGE`, `WEB_FETCH_TIMEOUT`, `WEB_UNSUPPORTED_CONTENT_TYPE`.
 
 ## The service
 
-`WebRuntime` registers search and fetch providers, rejects duplicate ids with `WEB_DUPLICATE_PROVIDER`, and resolves providers at execution time with structured selection errors. The local fetch backend accepts only HTTP(S), rejects credentials, caps redirects, bytes, characters, and time, revalidates every same-origin redirect hop, and decodes the body; the tool owns presentation. The local backend does not block private-network targets; do not enable `web_fetch` where it can reach sensitive internal ones.
+`WebRuntime` registers search and fetch providers, rejects duplicate ids with `WEB_DUPLICATE_PROVIDER`, and resolves providers at execution time with structured selection errors. Search normalizes and dispatches the source allowlist, enforces it over every returned structured source, and only then applies the source-count cap. The local fetch backend accepts only HTTP(S), rejects credentials, caps redirects, bytes, characters, and time, revalidates every same-origin redirect hop, and decodes the body; the tool owns presentation. The local backend does not block private-network targets; do not enable `web_fetch` where it can reach sensitive internal ones.
 
 <!-- BEGIN GENERATED cordis-surface (gen-cordis-catalog.ts) — do not edit between markers -->
 
@@ -176,9 +183,11 @@ registerFetchProvider(provider: WebFetchProvider): () => void
 /**
  * Run one search through the selected provider. Resolves the provider at call
  * time with the selection rules above; throws {@link WebError} when the
- * capability cannot run. The seam enforces `request.maxResults` on the result:
- * if the provider over-returns, `sources[]` is truncated and `truncated` set.
- * @param request - the query and optional result limit.
+ * capability cannot run. The seam defensively enforces
+ * `request.allowedDomains` after the provider returns, then enforces
+ * `request.maxResults`: if the provider over-returns, `sources[]` is truncated
+ * and `truncated` set.
+ * @param request - the query, optional domain allowlist, and result limit.
  * @param signal - optional cancellation signal forwarded to the provider.
  * @returns the provider's results, capped to `request.maxResults`.
  */

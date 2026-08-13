@@ -131,18 +131,26 @@ export class WebRuntime extends Service {
   /**
    * Run one search through the selected provider. Resolves the provider at call
    * time with the selection rules above; throws {@link WebError} when the
-   * capability cannot run. The seam enforces `request.maxResults` on the result:
-   * if the provider over-returns, `sources[]` is truncated and `truncated` set.
-   * @param request - the query and optional result limit.
+   * capability cannot run. The seam defensively enforces
+   * `request.allowedDomains` after the provider returns, then enforces
+   * `request.maxResults`: if the provider over-returns, `sources[]` is truncated
+   * and `truncated` set.
+   * @param request - the query, optional domain allowlist, and result limit.
    * @param signal - optional cancellation signal forwarded to the provider.
    * @returns the provider's results, capped to `request.maxResults`.
    */
   async search(request: WebSearchRequest, signal?: AbortSignal): Promise<WebSearchResult> {
+    const allowedDomains = normalizeAllowedDomains(request.allowedDomains)
+    const normalizedRequest: WebSearchRequest = {
+      ...request,
+      ...allowedDomains === undefined ? {} : { allowedDomains },
+    }
     const provider = resolveProvider({
       providers: this.searchProviders,
       ...this.searchProviderId !== undefined ? { configuredId: this.searchProviderId } : {},
     })
-    const result = await provider.search(request, signal)
+    const result = await provider.search(normalizedRequest, signal)
+    enforceAllowedSources(result, allowedDomains)
     return capSources(result, request.maxResults)
   }
 
@@ -161,6 +169,61 @@ export class WebRuntime extends Service {
     })
     return provider.fetch(request, signal)
   }
+}
+
+/** Maximum portable allowlist size (the smallest known provider limit). */
+const MAX_ALLOWED_DOMAINS = 20
+
+/**
+ * Normalize and validate a portable domain allowlist before provider dispatch.
+ * The shared contract accepts only ASCII hostnames: no schemes, paths,
+ * credentials, ports, wildcards, or IP literals. Exact duplicates collapse in
+ * first-seen order. An absent list stays absent rather than becoming an
+ * accidental deny-all filter.
+ *
+ * @param values - caller-supplied hostnames, or `undefined` for no restriction.
+ * @returns a lower-case, deduplicated allowlist, or `undefined`.
+ * @throws {@link WebError} `WEB_INVALID_SEARCH_FILTER` for an invalid list.
+ */
+function normalizeAllowedDomains(values: readonly string[] | undefined): readonly string[] | undefined {
+  if (values === undefined) return undefined
+  if (values.length === 0) throw invalidSearchFilter('allowedDomains must contain at least one domain')
+  if (values.length > MAX_ALLOWED_DOMAINS) {
+    throw invalidSearchFilter(`allowedDomains supports at most ${MAX_ALLOWED_DOMAINS} domains`)
+  }
+  const domains = values.map((value) => {
+    if (value !== value.trim() || value.length === 0) {
+      throw invalidSearchFilter('allowedDomains entries must be non-empty and have no surrounding whitespace')
+    }
+    if (!/^[\x21-\x7e]+$/u.test(value)) {
+      throw invalidSearchFilter('allowedDomains entries must contain only printable ASCII')
+    }
+    if (value.length > 253 || value.includes('://') || value.includes('/') || value.includes('\\')
+      || value.includes('?') || value.includes('#') || value.includes('@') || value.includes(':')) {
+      throw invalidSearchFilter('allowedDomains entries must be bare hostnames without scheme, path, credentials, port, query, or fragment')
+    }
+    const hostname = value.toLowerCase()
+    const labels = hostname.split('.')
+    let parsedHostname: string
+    try {
+      parsedHostname = new URL(`http://${hostname}`).hostname.toLowerCase()
+    } catch {
+      throw invalidSearchFilter('allowedDomains entries must be valid ASCII hostnames, not IP literals')
+    }
+    if (/^(?:\d{1,3}\.){3}\d{1,3}$/u.test(hostname)
+      || parsedHostname !== hostname
+      || labels.length < 2
+      || labels.some(label => !/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/u.test(label))) {
+      throw invalidSearchFilter('allowedDomains entries must be valid ASCII hostnames, not IP literals')
+    }
+    return hostname
+  })
+  return [...new Set(domains)]
+}
+
+/** Build the stable error used for invalid search-domain controls. */
+function invalidSearchFilter(message: string): WebError {
+  return new WebError(message, 'WEB_INVALID_SEARCH_FILTER')
 }
 
 interface ResolvableProvider {
@@ -197,6 +260,36 @@ function resolveProvider<P extends ResolvableProvider>(selection: Selection<P>):
 function capSources(result: WebSearchResult, maxResults: number | undefined): WebSearchResult {
   if (maxResults === undefined || result.sources.length <= maxResults) return result
   return { ...result, sources: result.sources.slice(0, maxResults), truncated: true }
+}
+
+/**
+ * Enforce a provider-neutral hostname allowlist over normalized source URLs.
+ * Providers receive the same list so they can constrain retrieval; this second
+ * pass fails loudly when an adapter or upstream ignores it. Silently dropping a
+ * source is unsafe because provider-generated prose may already cite it.
+ */
+function enforceAllowedSources(result: WebSearchResult, allowedDomains: readonly string[] | undefined): void {
+  if (allowedDomains === undefined) return
+  const violatingIndex = result.sources.findIndex(source => !allowedDomains.some(domain => sourceMatchesDomain(source.url, domain)))
+  if (violatingIndex === -1) return
+  throw new WebError(
+    `web search provider returned source ${violatingIndex + 1} outside allowedDomains`,
+    'WEB_SEARCH_FILTER_VIOLATION',
+  )
+}
+
+/** Match one HTTP(S) source URL against an exact hostname or its subdomains. */
+function sourceMatchesDomain(sourceUrl: string, domain: string): boolean {
+  let url: URL
+  try {
+    url = new URL(sourceUrl)
+  } catch {
+    return false
+  }
+  if (url.protocol !== 'http:' && url.protocol !== 'https:') return false
+  const sourceHost = url.hostname.toLowerCase()
+  const allowedHost = domain.toLowerCase()
+  return sourceHost === allowedHost || sourceHost.endsWith(`.${allowedHost}`)
 }
 
 export default WebRuntime

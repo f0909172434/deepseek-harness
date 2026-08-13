@@ -114,6 +114,7 @@ export class PerplexitySearchProvider implements WebSearchProvider {
           model: this.options.model,
           max_tokens: this.options.maxTokens,
           messages: [{ role: 'user', content: request.query }],
+          ...request.allowedDomains !== undefined ? { search_domain_filter: request.allowedDomains } : {},
           ...this.options.searchRecency !== undefined ? { search_recency_filter: this.options.searchRecency } : {},
         }),
         ...signal !== undefined ? { signal } : {},

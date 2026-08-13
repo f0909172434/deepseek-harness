@@ -12,7 +12,7 @@ import {
   DEEPSEEK_PROVIDER_ID,
 } from '@deepseek-ai/dsh-web-search-deepseek'
 import * as deepseekPlugin from '@deepseek-ai/dsh-web-search-deepseek'
-import { citationSnippets, mapAnthropicResponse } from '../src/provider.ts'
+import { citationSnippets, mapAnthropicResponse, searchInstruction } from '../src/provider.ts'
 import type { AnthropicResponse } from '@deepseek-ai/dsh-web-search-deepseek/src/types.ts'
 
 /** Construct the provider over a fixed options value; production passes a live thunk. */
@@ -182,7 +182,7 @@ describe('DeepSeekSearchProvider request mapping', () => {
     const body = {
       model: 'deepseek-chat',
       max_tokens: 4096,
-      messages: [{ role: 'user', content: [{ type: 'text', text: 'Perform a web search for the query: hello' }] }],
+      messages: [{ role: 'user', content: [{ type: 'text', text: searchInstruction({ query: 'hello' }) }] }],
       tools: [{ type: 'web_search_20250305', name: 'web_search', max_uses: 5 }],
     }
     expect(JSON.parse(init.body as string)).toEqual(body)
@@ -193,6 +193,27 @@ describe('DeepSeekSearchProvider request mapping', () => {
       body,
     })
     expect(recordRequest.mock.invocationCallOrder[0]).toBeLessThan(fetchMock.mock.invocationCallOrder[0] ?? 0)
+  })
+
+  it('sends and records allowedDomains as the native server-tool allowlist', async () => {
+    const fetchMock = vi.fn(async () => jsonResponse(searchResponse()))
+    const recordRequest = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+    await searchProvider({ ...options, recordRequest }).search({
+      query: 'current DeepSeek model as of 2026-08-14',
+      allowedDomains: ['deepseek.com'],
+    })
+    const [, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit]
+    const body = JSON.parse(init.body as string) as { tools: Array<Record<string, unknown>>; messages: Array<Record<string, unknown>> }
+    expect(body.tools).toEqual([{
+      type: 'web_search_20250305',
+      name: 'web_search',
+      max_uses: 5,
+      allowed_domains: ['deepseek.com'],
+    }])
+    expect(JSON.stringify(body.messages)).toContain('current first-party or benchmark-owner evidence')
+    expect(JSON.stringify(body.messages)).toContain('2026-08-14')
+    expect(recordRequest).toHaveBeenCalledWith(expect.objectContaining({ body }))
   })
 
   it('forwards the abort signal', async () => {

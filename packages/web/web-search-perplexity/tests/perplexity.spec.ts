@@ -105,6 +105,18 @@ describe('PerplexitySearchProvider request mapping', () => {
     expect(JSON.parse((fetchMock.mock.calls[1] as unknown as [string, RequestInit])[1].body as string)).not.toHaveProperty('search_recency_filter')
   })
 
+  it('maps allowedDomains to search_domain_filter alongside configured recency', async () => {
+    const fetchMock = vi.fn(async () => jsonResponse({ choices: [{ message: { content: 'a' } }], citations: [] }))
+    vi.stubGlobal('fetch', fetchMock)
+    await new PerplexitySearchProvider({ ...options, searchRecency: 'week' })
+      .search({ query: 'q', allowedDomains: ['deepseek.com'] })
+    const [, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit]
+    expect(JSON.parse(init.body as string)).toMatchObject({
+      search_domain_filter: ['deepseek.com'],
+      search_recency_filter: 'week',
+    })
+  })
+
   it('forwards the abort signal', async () => {
     const fetchMock = vi.fn(async () => jsonResponse({ citations: [] }))
     vi.stubGlobal('fetch', fetchMock)

@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
 import WebRuntime, {
   WebError,
@@ -185,6 +185,90 @@ describe('WebRuntime maxResults enforcement', () => {
     const result = await web.search({ query: 'q' })
     expect(result.sources).toHaveLength(2)
     expect(result.truncated).toBe(false)
+  })
+})
+
+describe('WebRuntime allowedDomains enforcement', () => {
+  it('normalizes and forwards the allowlist, then keeps exact hosts and subdomains in provider order', async () => {
+    const { web } = await mountWeb()
+    let seen: WebSearchRequest | undefined
+    web.registerSearchProvider(makeSearchProvider('exa', available, (request) => {
+      seen = request
+      return Promise.resolve(searchResult('provider prose', {
+        sources: [
+          { url: 'https://docs.deepseek.com/current' },
+          { url: 'https://deepseek.com/models' },
+        ],
+      }))
+    }))
+    const result = await web.search({ query: 'q', allowedDomains: ['DeepSeek.COM', 'deepseek.com'] })
+    expect(seen?.allowedDomains).toEqual(['deepseek.com'])
+    expect(result.content).toBe('provider prose')
+    expect(result.sources.map(source => source.url)).toEqual([
+      'https://docs.deepseek.com/current',
+      'https://deepseek.com/models',
+    ])
+  })
+
+  it.each([
+    ['look-alike host', 'https://notdeepseek.com/current'],
+    ['malformed URL', 'not a url'],
+    ['non-HTTP URL', 'ftp://deepseek.com/file'],
+  ])('fails loudly on a provider %s before maxResults', async (_label, violatingUrl) => {
+    const { web } = await mountWeb()
+    web.registerSearchProvider(makeSearchProvider('exa', available, () => Promise.resolve(searchResult('unsafe answer', {
+      sources: [
+        { url: 'https://deepseek.com/current' },
+        { url: violatingUrl },
+      ],
+    }))))
+    const error = await web.search({ query: 'q', allowedDomains: ['deepseek.com'], maxResults: 1 }).then(
+      () => undefined,
+      (caught: unknown) => caught as WebError,
+    )
+    expect(error).toMatchObject({ code: 'WEB_SEARCH_FILTER_VIOLATION' })
+    expect(error?.message).toBe('web search provider returned source 2 outside allowedDomains')
+    expect(error?.message).not.toContain(violatingUrl)
+  })
+
+  it('does not persist a provider URL secret in the filter-violation message', async () => {
+    const { web } = await mountWeb()
+    const secret = 'DO_NOT_LOG_THIS_TOKEN'
+    web.registerSearchProvider(makeSearchProvider('exa', available, () => Promise.resolve(searchResult('unsafe', {
+      sources: [{ url: `https://outside.test/result?token=${secret}` }],
+    }))))
+    const error = await web.search({ query: 'q', allowedDomains: ['deepseek.com'] }).then(
+      () => undefined,
+      (caught: unknown) => caught as WebError,
+    )
+    expect(error?.code).toBe('WEB_SEARCH_FILTER_VIOLATION')
+    expect(error?.message).not.toContain(secret)
+  })
+
+  it.each([
+    ['empty list', []],
+    ['too many entries', Array.from({ length: 21 }, (_, index) => `d${index}.test`)],
+    ['blank', ['']],
+    ['whitespace', [' deepseek.com']],
+    ['Unicode', ['deepseek。com']],
+    ['scheme', ['https://deepseek.com']],
+    ['path', ['deepseek.com/docs']],
+    ['port', ['deepseek.com:443']],
+    ['wildcard', ['*.deepseek.com']],
+    ['IPv4', ['127.0.0.1']],
+    ['short IPv4', ['127.1']],
+    ['three-part IPv4', ['1.2.3']],
+    ['hex IPv4', ['0x7f.1']],
+    ['octal IPv4', ['0177.1']],
+    ['URL parser failure', ['deepseek%.com']],
+    ['bad label', ['-deepseek.com']],
+  ])('rejects %s before provider dispatch', async (_label, allowedDomains) => {
+    const { web } = await mountWeb()
+    const search = vi.fn(async () => searchResult('unreachable'))
+    web.registerSearchProvider(makeSearchProvider('exa', available, search))
+    await expect(web.search({ query: 'q', allowedDomains }))
+      .rejects.toThrow(expect.objectContaining({ code: 'WEB_INVALID_SEARCH_FILTER' }))
+    expect(search).not.toHaveBeenCalled()
   })
 })
 

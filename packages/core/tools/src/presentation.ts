@@ -323,7 +323,7 @@ export interface WebSource {
   title?: string
   /** A short excerpt or summary, when the provider returned one. */
   snippet?: string
-  /** Publication/crawl timestamp as a provider-supplied ISO-8601 string, when present. */
+  /** Provider-supplied publication, crawl, or page-age label, when present. */
   publishedAt?: string
 }
 

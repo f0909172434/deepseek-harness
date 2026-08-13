@@ -114,6 +114,21 @@ describe('ExaSearchProvider request mapping', () => {
     expect(JSON.parse(init.body as string)).toMatchObject({ numResults: 7 })
   })
 
+  it('maps allowedDomains to includeDomains alongside the result and highlight controls', async () => {
+    const fetchMock = vi.fn(async () => jsonResponse({ results: [] }))
+    vi.stubGlobal('fetch', fetchMock)
+    await new ExaSearchProvider({ ...options, searchType: 'neural', highlightsPerResult: 3 })
+      .search({ query: 'q', allowedDomains: ['deepseek.com'], maxResults: 5 })
+    const [, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit]
+    expect(JSON.parse(init.body as string)).toEqual({
+      query: 'q',
+      type: 'neural',
+      includeDomains: ['deepseek.com'],
+      contents: { highlights: { highlightsPerUrl: 3 } },
+      numResults: 5,
+    })
+  })
+
   it('lets a request maxResults win over the configured numResults', async () => {
     const fetchMock = vi.fn(async () => jsonResponse({ results: [] }))
     vi.stubGlobal('fetch', fetchMock)

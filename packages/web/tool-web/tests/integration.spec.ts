@@ -93,13 +93,16 @@ describe('web_fetch integration over the real backend', () => {
 
 describe('web_search integration over the real Exa provider', () => {
   it('runs web_search end-to-end and formats the provider result', async () => {
-    vi.stubGlobal('fetch', vi.fn(async () => new Response(
+    const fetchMock = vi.fn(async () => new Response(
       JSON.stringify({ results: [{ url: 'https://result.test', title: 'Result', highlights: ['a highlight'] }] }),
       { status: 200, headers: { 'content-type': 'application/json' } },
-    )))
-    const out = await call('web_search', { query: 'deepseek-official' })
+    ))
+    vi.stubGlobal('fetch', fetchMock)
+    const out = await call('web_search', { query: 'deepseek-official', allowed_domains: ['result.test'] })
     expect(out.isError).toBe(false)
     expect(out.content.map(b => b.type === 'text' ? b.text : '').join('')).toContain('[Result](https://result.test)')
+    const [, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit]
+    expect(JSON.parse(init.body as string)).toMatchObject({ includeDomains: ['result.test'] })
   })
 })
 
@@ -110,7 +113,7 @@ describe('tool-call timeout policy over the migrated web tools', () => {
     const searchParams = byName.get('web_search')!.parameters as { properties: Record<string, unknown> }
     expect(Object.keys(fetchParams.properties)).toEqual(['url'])
     expect('timeout_ms' in fetchParams.properties).toBe(false)
-    expect(Object.keys(searchParams.properties)).toEqual(['query'])
+    expect(Object.keys(searchParams.properties)).toEqual(['query', 'allowed_domains'])
   })
 })
 

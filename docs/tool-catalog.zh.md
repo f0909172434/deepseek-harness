@@ -1856,7 +1856,7 @@ todo_write 是会话所有的状态；UI 将最新的 todo/write 事件渲染为
 
 ### `web_search`
 
-在 Web 上搜索最新信息。返回可选的摘要答案和源 URL 列表。
+搜索实时 Web。对于可变的当前、最新或截至某日的事实必须使用此工具。支持可选的来源域名允许列表。
 
 ```json
 {
@@ -1865,6 +1865,13 @@ todo_write 是会话所有的状态；UI 将最新的 todo/write 事件渲染为
     "query": {
       "type": "string",
       "description": "The search query."
+    },
+    "allowed_domains": {
+      "type": "array",
+      "description": "Optional allowlist of up to 20 ASCII hostnames, without scheme or path. Exact hosts and their subdomains are allowed.",
+      "items": {
+        "type": "string"
+      }
     }
   },
   "required": [

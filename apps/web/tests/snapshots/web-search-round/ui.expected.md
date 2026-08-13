@@ -9,13 +9,17 @@
   - tablist:
     - tab "Chat" [selected]
     - tab "Trajectory"
-- text: Use web_search to search exactly "DeepSeek Harness snapshot search". Then reply exactly SEARCH_DONE and stop. {{clock}}
+- text: Use web_search to search exactly "DeepSeek Harness snapshot search" with allowed_domains exactly ["docs.example.test"]. Then reply exactly SEARCH_DONE and stop. {{clock}}
 - button "Copy":
   - img
 - button "Context injection @deepseek-ai/dsh-system-prompt":
   - img
   - img
   - text: Context injection @deepseek-ai/dsh-system-prompt
+- button "Context injection time-context":
+  - img
+  - img
+  - text: Context injection time-context
 - button "Search DeepSeek Harness snapshot search":
   - img
   - img

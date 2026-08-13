@@ -21,7 +21,7 @@ Search and fetch share no request schema and no business logic, but they are del
 | Member | Semantics |
 |---|---|
 | `registerSearchProvider(provider)` / `registerFetchProvider(provider)` | Register a backend. Throws `WebError` `WEB_DUPLICATE_PROVIDER` on a duplicate id within that capability kind. Returns a disposer. Disposed with the calling fiber. |
-| `search(request, signal?)` | Resolve the search provider and run one search. Enforces `request.maxResults` on the result (truncates `sources[]`, sets `truncated`). Throws `WebError` when the capability cannot run. |
+| `search(request, signal?)` | Resolve the search provider and run one search. Normalizes `allowedDomains`, requires every returned source to satisfy it, then enforces `request.maxResults`. Invalid filters fail as `WEB_INVALID_SEARCH_FILTER`; provider violations fail as `WEB_SEARCH_FILTER_VIOLATION`. |
 | `fetch(request, signal?)` | Resolve the fetch provider and retrieve one URL. A non-2xx response is a result, not a throw. Throws `WebError` for failures to safely retrieve or represent the resource. |
 
 Providers register **capabilities**, not tools. `dsh-tool-web` is the only owner of model-facing names, descriptions, prompt guidance, JSON schemas, and presentation.
@@ -43,7 +43,7 @@ The failure branches throw `WebError`, whose structured code (plus message detai
 
 ## Vocabulary
 
-`WebSearchRequest` (`query`, `maxResults?`) → `WebSearchResult` (`content?`, `sources[]`, `truncated`); each `WebSearchSource` has a required `url` and optional `title`/`snippet`/`publishedAt` (Perplexity citations may be URL-only). `WebFetchRequest` (`url`) → `WebFetchResult` (final `url`, `statusCode`, `body`, `truncated`); cancellation is a direct optional `AbortSignal` argument to `search()`/`fetch()`. `WebFetchBody` is a CLOSED discriminated union (`html` | `text`) owned here — consumers `switch` to exhaustiveness so a new kind breaks their compilation until handled. See `src/types.ts` for the full contracts and the `WebError` code taxonomy.
+`WebSearchRequest` (`query`, `allowedDomains?`, `maxResults?`) → `WebSearchResult` (`content?`, `sources[]`, `truncated`). `allowedDomains` is a provider-neutral allowlist of at most 20 ASCII hostnames; exact hosts and subdomains match. The seam normalizes it before dispatch and validates every returned URL before applying the result cap. Each `WebSearchSource` has a required `url` and optional `title`/`snippet`/`publishedAt`; `publishedAt` is a provider-supplied publication, crawl, or page-age label, not guaranteed ISO-8601 or cross-provider comparable. `WebFetchRequest` (`url`) → `WebFetchResult` (final `url`, `statusCode`, `body`, `truncated`); cancellation is a direct optional `AbortSignal` argument to `search()`/`fetch()`. `WebFetchBody` is a CLOSED discriminated union (`html` | `text`) owned here — consumers `switch` to exhaustiveness so a new kind breaks their compilation until handled. See `src/types.ts` for the full contracts and the `WebError` code taxonomy.
 
 ## Model Experience
 
@@ -56,6 +56,6 @@ No direct invalidation; the named consumer owns any request-prefix changes.
 ## Known Limitations and Deferred Work
 
 - **No observation surface** — no provider-change event and no capability-status query; availability is observed only by executing `search()`/`fetch()` and routing the thrown `WebError` codes, and the no-provider failure is the generic `WEB_PROVIDER_UNAVAILABLE` with no per-provider reason enumeration ([Agent Note](../../../.agents/notes/archived/simplification/2026-07-04-drop-unconsumed-web-observation-surface.md)).
-- **`WebSearchRequest` carries only `query` + `maxResults`** — provider-neutral controls (recency, domain filters, regional hints, search depth) are deferred until Exa and Perplexity can both honor them honestly ([seam Agent Note](../../../.agents/notes/implemented/architecture/2026-06-24-web-capability-seam.md)).
+- **Other provider-neutral search controls remain deferred** — the source allowlist is portable and seam-verified; recency, region, search depth, and domain blocklists remain absent until every selected provider can honor the same semantics honestly ([seam Agent Note](../../../.agents/notes/implemented/architecture/2026-06-24-web-capability-seam.md)).
 - **`WebFetchBody` has no `pdf` arm** — text-extractable PDF support is named deferred work; the closed union makes adding it a compile-enforced change across the three web packages.
 - **Provider-backed page extraction is out of scope of `fetch()`** — a Firecrawl/Tavily-style `web_extract` capability is deferred rather than widening the fetch operation.

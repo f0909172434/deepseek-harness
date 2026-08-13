@@ -26,9 +26,13 @@ export const WEB_SEARCH_MAX_RESULTS = 8
  * @param args - the schema-validated `web_search` arguments.
  * @returns the accepted arguments, passed through unchanged.
  */
-export function parseSearchArgs(args: { query: string }): { query: string } {
+export function parseSearchArgs(args: {
+  query: string
+  allowed_domains?: string[]
+}): { query: string; allowedDomains?: readonly string[] } {
   if (args.query.trim().length === 0) throw new Error('query must be a non-empty string')
-  return { query: args.query }
+  if (args.allowed_domains === undefined) return { query: args.query }
+  return { query: args.query, allowedDomains: args.allowed_domains }
 }
 
 /** Display label for a source: its title, else its hostname. */
@@ -216,16 +220,21 @@ export function applyWebSearchTool(
   ctx.systemPrompt.section({
     name: 'tool:web_search',
     order: 110,
-    text: fetchEnabled
-      ? 'Use the web_search tool to discover current information on the web. It returns an optional answer plus a list of source URLs. Follow up with web_fetch when you need the full content of a specific result, and cite the relevant URLs as markdown links.'
-      : 'Use the web_search tool to discover current information on the web. It returns an optional answer plus a list of source URLs. Use the returned source snippets when available, and cite the relevant URLs as markdown links.',
+    text: `${fetchEnabled
+      ? 'Use the web_search tool to discover current information on the web. It returns an optional answer plus a list of source URLs. Follow up with web_fetch when you need the full content of a specific result.'
+      : 'Use the web_search tool to discover current information on the web. It returns an optional answer plus a list of source URLs. Use the returned source snippets when available.'} For current, latest, today, version, price, benchmark, or as-of claims, you must search before answering, include the absolute date in the query, and verify that every compared item is the current version for the requested date. Use allowed_domains for a first-party verification pass and a separate unrestricted search for independent comparisons. Never substitute an older version when the current one cannot be verified; state the unresolved gap. When a result has no snippet, lower confidence and disclose that no supporting excerpt was returned. Cite the relevant URLs as markdown links.`,
   })
 
   ctx.tools.register(defineTool({
     name: 'web_search',
-    description: 'Search the web for current information. Returns an optional summary answer and a list of source URLs.',
+    description: 'Search the live web. Required for mutable current/latest/as-of facts. Supports an optional source-domain allowlist.',
     parameters: {
       query: { type: 'string', required: true, description: 'The search query.' },
+      allowed_domains: {
+        type: 'array',
+        items: { type: 'string' },
+        description: 'Optional allowlist of up to 20 ASCII hostnames, without scheme or path. Exact hosts and their subdomains are allowed.',
+      },
     },
     output: {
       schema: {
@@ -259,7 +268,7 @@ export function applyWebSearchTool(
     async execute(args, exec) {
       const input = parseSearchArgs(args)
       const result = await ctx.web.search(
-        { query: input.query, maxResults },
+        { ...input, maxResults },
         exec.signal,
       )
       return {

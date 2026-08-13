@@ -2,7 +2,7 @@
 // kinds of the `web` render intent, discriminated by `kind`: a `search` shows an
 // optional provider answer above a citation list of sources (each a safe
 // external link labelled by its title, or its hostname when the provider gave
-// none, with the snippet and publication date below it), and a `fetch` shows a
+// none, with the snippet and provider date/page-age label below it), and a `fetch` shows a
 // compact retrieval summary (the linked final URL and its HTTP status). Both
 // mark a capped retrieval. Every link is a same-origin-safe external anchor:
 // only http(s) URLs become anchors (target/rel set) — the http(s) subset of the
@@ -35,7 +35,7 @@ export interface WebSourceView {
   title?: string | undefined
   /** A short excerpt or summary shown under the link. */
   snippet?: string | undefined
-  /** Publication/crawl timestamp, a provider-supplied string shown under the link. */
+  /** Provider-supplied publication, crawl, or page-age label shown under the link. */
   publishedAt?: string | undefined
 }
 

@@ -38,7 +38,7 @@ Exa 和 Perplexity 提供专用搜索端点，DeepSeek 则没有。该提供方�
 
 ## 映射
 
-DeepSeek 返回的提供方生成答案均不被该提供方信任为 `content`，因此省略 `content`。`sources[]` 来自 `web_search_result` 条目，这些条目位于 `web_search_tool_result` 块内：`url` ← `url`、`title` ← `title`、`publishedAt` ← `page_age`。`cited_text` 条目按 URL 标识，单独位于文本块的 `citations[]` 中；提供方会按 URL 将它们关联到相应结果，没有摘录时省略 `snippet`。
+DeepSeek 返回的提供方生成答案均不被该提供方信任为 `content`，因此省略 `content`。`sources[]` 来自 `web_search_result` 条目，这些条目位于 `web_search_tool_result` 块内：`url` ← `url`、`title` ← `title`、`publishedAt` ← `page_age`。`page_age` 是提供方给出的最后更新时间标签，不保证是 ISO-8601。`cited_text` 条目按 URL 标识，单独位于文本块的 `citations[]` 中；提供方会按 URL 将它们关联到相应结果，没有摘录时省略 `snippet`。
 
 结果按 URL 去重，因为一次请求可能在多次搜索中呈现同一页面。DeepSeek 公开 `maxUses` 而非结果数量旋钮，因此 seam 会强制执行 `maxResults`：截断 `sources[]` 并设置 `truncated`。
 
@@ -54,7 +54,16 @@ DeepSeek 返回的提供方生成答案均不被该提供方信任为 `content`�
 
 #### 模型看到的内容
 
-独立的 DeepSeek 模型会原样接收 `Perform a web search for the query: <query>` 作为用户文本，并收到一个原生 `web_search` 服务器工具定义。该请求不属于会话模型上下文。
+独立的 DeepSeek 模型会收到以下四行指令。它还会收到一个原生 `web_search` 服务器工具定义；当 seam 请求携带 `allowedDomains` 时，该工具以 `allowed_domains` 收到同一列表。此辅助请求不属于会话模型上下文，因此外层查询必须携带搜索所需的绝对日期。
+
+##### 逐字指令
+
+```markdown
+Search the live web and answer this exact query: <query>
+When the query explicitly says "as of" a date, treat that date as the cutoff. Prefer current first-party or benchmark-owner evidence.
+For current, latest, or as-of version and benchmark comparisons, verify that every item is the current version for the requested date. Do not substitute an older version when the current one cannot be verified.
+After searching, answer the query and cite every factual claim so the response contains citation excerpts for the caller. State any unresolved gap explicitly.
+```
 
 #### Token 影响
 
@@ -68,7 +77,7 @@ DeepSeek 返回的提供方生成答案均不被该提供方信任为 `content`�
 
 #### 模型看到的内容
 
-通过 [`dsh-tool-web`](../tool-web/README.md)，会话模型会看到结构化搜索块中去重后的 URL、标题、日期与引用 snippet；提供方文本不会作为答案受到信任。该提供方的具体错误消息包括带有处理指引的凭据缺失消息、`DeepSeek search credential resolution failed: <error>`、`DeepSeek search aborted`、`DeepSeek search request failed: <error>`、`DeepSeek returned no web_search_tool_result blocks; the request may not have triggered native web search` 和 `DeepSeek returned an unprocessable response body: <error>`；HTTP 失败保留提供方消息。错误包装属于消费方。
+通过 [`dsh-tool-web`](../tool-web/README.md)，会话模型会看到结构化搜索块中去重后的 URL、标题、提供方日期或页面年龄标签与引用 snippet；提供方文本不会作为答案受到信任。该提供方的具体错误消息包括带有处理指引的凭据缺失消息、`DeepSeek search credential resolution failed: <error>`、`DeepSeek search aborted`、`DeepSeek search request failed: <error>`、`DeepSeek returned no web_search_tool_result blocks; the request may not have triggered native web search` 和 `DeepSeek returned an unprocessable response body: <error>`；HTTP 失败保留提供方消息。错误包装属于消费方。
 
 #### Token 影响
 
@@ -84,3 +93,4 @@ DeepSeek 返回的提供方生成答案均不被该提供方信任为 `content`�
 - **动态凭据的可用性在操作内部解析**：同步的 `available()` 约定可以确认解析器存在，但无法查询异步凭据存储。因此，选中的无密钥提供方会使搜索以 `WEB_PROVIDER_CREDENTIAL_MISSING` 失败；稳定的 `web_search` schema 仍保持注册。调用方取消在本地与该预检存在竞态，但无法强制任意凭据后端自行停止工作。
 - **超量返回的源仍消耗 token**：协议没有结果数量旋钮，`maxResults` 只能由 seam 在事后截断。
 - **未引用的结果没有 `snippet`**：只有 `text` 块中的引用（`cited_text`）匹配其 URL 时，源才会获得 snippet。
+- **时间指令只改善规划，不构成 freshness 保证**：该提供方没有可移植的发布日期过滤条件，`page_age` 也不是可比较的时间戳。会话模型仍须使用含绝对日期的查询，并从返回证据核验当前版本。

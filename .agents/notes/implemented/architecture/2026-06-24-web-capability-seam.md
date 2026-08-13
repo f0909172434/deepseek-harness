@@ -155,24 +155,29 @@ Operational overrides feed the same explicit selection path: `DSH_WEB_SEARCH_PRO
 
 ## Search request and result schema
 
-The `web_search` model-facing tool is small. The only model-facing argument is:
+The `web_search` model-facing tool has two arguments:
 
 - `query`: required string.
+- `allowed_domains`: optional allowlist of one to 20 bare ASCII DNS hostnames. Each entry permits the exact host and its subdomains; schemes, paths, credentials, ports, wildcards, IP literals, and Unicode hostnames are rejected.
 
 `max_results` is NOT exposed to the model. It is a `dsh-tool-web`-layer decision: the tool sets the result bound — the `searchMaxResults` plugin config, default `8` (aligning with OpenCode's Exa default), mirroring `dsh-tool-fs`'s `readLimit` — and passes it to the seam as `maxResults` on the `WebSearchRequest`. Keeping it off the model schema means the model just asks a question and the product controls how much context comes back; the field can be promoted to a model-facing argument later without breaking the seam.
 
-`maxResults` flows tool → seam → provider, and the bound is enforced on the way back:
+`dsh-tool-web` maps `allowed_domains` to `WebSearchRequest.allowedDomains`. `ctx.web` validates the list, lowercases and deduplicates entries in first-seen order, and sends the normalized request to the selected provider. DeepSeek maps it to native `allowed_domains`, Exa to `includeDomains`, and Perplexity to `search_domain_filter`. After the provider returns, `ctx.web` checks every structured source URL against the allowlist before applying `maxResults`; a malformed, non-HTTP(S), or out-of-scope URL fails the whole search with `WEB_SEARCH_FILTER_VIOLATION`. It does not silently drop a source because provider-generated `content` may already cite or rely on that source.
+
+`maxResults` flows tool → seam → provider, and the bound is enforced after the domain check on the way back:
 
 - `dsh-tool-web` owns the value and puts it on `WebSearchRequest.maxResults`.
-- `ctx.web` passes the request through to the selected provider unchanged.
+- `ctx.web` sends the request, including any normalized `allowedDomains`, to the selected provider.
 - A provider applies `maxResults` at the request layer when its API supports it (Exa's `numResults`), as a cost/latency optimization.
 - `ctx.web` enforces the bound on the result: if a provider returns more than `maxResults` sources — because its API has no result-count control (Perplexity) or ignored the hint — the seam truncates `sources[]` to `maxResults` and sets `WebSearchResult.truncated` to `true` before returning. This makes the bound a single cross-provider guarantee the model-facing layer can rely on, rather than something each provider must remember to honor.
 
-The seam request carries no provider-specific controls — no Perplexity model selection, search recency, domain filters, Exa `livecrawl`, Exa `type`, regional hints, generated-answer budgets, or search depth. Such a field is added only when it has provider-neutral semantics that both the tool schema and selected providers can honor honestly.
+The seam request carries no provider-specific controls — no Perplexity model selection, search recency, domain blocklist, Exa `livecrawl`, Exa `type`, regional hints, generated-answer budgets, or search depth. `allowedDomains` is present because every selected provider has a native allowlist mapping and the seam can enforce the returned structured sources itself. Another field is added only when it has provider-neutral semantics that the tool schema, selected providers, and seam can honor honestly.
 
 ```ts
 interface WebSearchRequest {
   readonly query: string
+  /** ASCII hostnames whose exact host and subdomains may appear in results. */
+  readonly allowedDomains?: readonly string[]
   /** Upper bound on returned sources; the seam truncates to it. Omitted = no bound. `dsh-tool-web` always sets it. */
   readonly maxResults?: number
 }
@@ -187,11 +192,12 @@ interface WebSearchSource {
   readonly url: string
   readonly title?: string
   readonly snippet?: string
+  /** Provider-supplied publication, crawl, or page-age label; format varies. */
   readonly publishedAt?: string
 }
 ```
 
-`content` is optional provider-generated answer text, search context, or summary. `sources[]` is the portable citation shape. A source always has a URL; title, snippet, and `publishedAt` are optional because not every provider returns them. `title` is not required: Perplexity-style citations may provide only URLs, and forcing adapters to invent titles would make the seam lie. `dsh-tool-web` renders a `title ?? hostname(url)`-style fallback label for display. `publishedAt` is an optional publication/crawl timestamp as an ISO-8601 string — Exa returns it as `publishedDate` on each result and Perplexity returns a `date` on search results, so it is real provider data, not derived; the seam carries it as a string and leaves date parsing to the consumer.
+`content` is optional provider-generated answer text, search context, or summary. `sources[]` is the portable citation shape. A source always has a URL; title, snippet, and `publishedAt` are optional because not every provider returns them. `title` is not required: Perplexity-style citations may provide only URLs, and forcing adapters to invent titles would make the seam lie. `dsh-tool-web` renders a `title ?? hostname(url)`-style fallback label for display. `publishedAt` carries a provider-supplied publication, crawl, or page-age label. Exa supplies `publishedDate`, Perplexity supplies `date`, and DeepSeek supplies `page_age`; the seam preserves the string but does not promise ISO-8601 or cross-provider comparability.
 
 Exa search maps each entry of the provider's flat `results[]` into a `WebSearchSource`: `url` ← `url`, `title` ← `title`, `snippet` ← the first `highlights[]` entry (an entry with no highlight has no portable snippet and is dropped), `publishedAt` ← `publishedDate`. Exa returns no provider-generated answer, so `content` is omitted. Perplexity search maps `choices[0].message.content` to `content` and prefers the structured top-level `search_results[]` for `sources[]` — `url` ← `url`, `title` ← `title`, `snippet` ← `snippet` (often empty), `publishedAt` ← `date` — falling back to the URL-only `citations[]` array only when `search_results` is absent (those sources carry just a `url`). If a provider returns fewer structured fields than the seam supports, the adapter omits those optional fields.
 
@@ -265,6 +271,8 @@ The model-facing output is text-first because tool results are `ContentBlock[]`,
 - `WEB_PROVIDER_CONFIGURED_UNAVAILABLE`
 - `WEB_PROVIDER_AMBIGUOUS`
 - `WEB_DUPLICATE_PROVIDER`
+- `WEB_INVALID_SEARCH_FILTER`
+- `WEB_SEARCH_FILTER_VIOLATION`
 - `WEB_INVALID_URL`
 - `WEB_BLOCKED_URL`
 - `WEB_REDIRECT_BLOCKED`
@@ -274,13 +282,13 @@ The model-facing output is text-first because tool results are `ContentBlock[]`,
 - `WEB_UNSUPPORTED_CONTENT_TYPE`
 - `WEB_PROVIDER_ERROR`
 
-`WEB_DUPLICATE_PROVIDER` is thrown synchronously from `registerSearchProvider` / `registerFetchProvider` when an id is already registered for that capability kind (the analogue of `LlmRuntime`'s `DUPLICATE_ADAPTER`); it is a registration-time programming error, not an execution outcome, but shares the `WebError` code space so callers see one taxonomy. `WEB_PROVIDER_ERROR` is the catch-all for a provider's own failure surfaced through the seam, including network/transport failure in `web-fetch-http` (DNS, connection refused, TLS); there is deliberately no separate `WEB_NETWORK` code — the provider sets a descriptive message so the model and logs can tell a network failure from a provider API failure.
+`WEB_DUPLICATE_PROVIDER` is thrown synchronously from `registerSearchProvider` / `registerFetchProvider` when an id is already registered for that capability kind (the analogue of `LlmRuntime`'s `DUPLICATE_ADAPTER`); it is a registration-time programming error, not an execution outcome, but shares the `WebError` code space so callers see one taxonomy. `WEB_INVALID_SEARCH_FILTER` rejects an invalid `allowedDomains` request before provider dispatch. `WEB_SEARCH_FILTER_VIOLATION` rejects a provider result whose structured source list violates a normalized allowlist. `WEB_PROVIDER_ERROR` is the catch-all for a provider's own failure surfaced through the seam, including network/transport failure in `web-fetch-http` (DNS, connection refused, TLS); there is deliberately no separate `WEB_NETWORK` code — the provider sets a descriptive message so the model and logs can tell a network failure from a provider API failure.
 
 Tool execution lets these errors flow through `ToolRuntime.execute()`, which already converts `HarnessError` into an error tool result with structured metadata. The model gets a readable error message; hooks, tests, and UI code can route on the stable code.
 
 ## Testing
 
-Each layer is pinned at its own boundary: the registry/selection/truncation/abort contract and the `WebError` codes in `dsh-web`; per-provider request/response mapping over recorded fixtures (Perplexity fixtures include URL-only citations so the optional source fields stay honest) plus a self-skipping with-key smoke per real provider; real local-HTTP behavior in `web-fetch-http`; and enablement-driven registration, structured execution errors, and result formatting through the real tool registry in `dsh-tool-web`. A real-Loader smoke guards the two export shapes ([postmortem 0001](../../../../docs/postmortem/0001-acp-default-export-drops-inject.md)): `dsh-web` is a default-exported service, while the providers and `tool-web` are namespace plugins where a stray `export default` would drop `inject`.
+Each layer is pinned at its own boundary: registry/selection, `allowedDomains` normalization and fail-loud source enforcement before truncation, abort behavior, and the `WebError` codes in `dsh-web`; native allowlist request mapping and response mapping over recorded fixtures in each provider (Perplexity fixtures include URL-only citations so the optional source fields stay honest), plus a self-skipping with-key smoke per real provider; real local-HTTP behavior in `web-fetch-http`; and model-argument mapping, enablement-driven registration, structured execution errors, and result formatting through the real tool registry in `dsh-tool-web`. The keyless web application snapshot exercises an `allowed_domains` call through the real composition and records the DeepSeek auxiliary request. A real-Loader smoke guards the two export shapes ([postmortem 0001](../../../../docs/postmortem/0001-acp-default-export-drops-inject.md)): `dsh-web` is a default-exported service, while the providers and `tool-web` are namespace plugins where a stray `export default` would drop `inject`.
 
 ## Alternatives considered
 
@@ -310,7 +318,9 @@ Rejected for the seam. `prompt` turns fetch into LLM summarization and couples p
 
 ## Consequences
 
-**The search schema is deliberately thin.** Exa and Perplexity both expose useful provider-specific controls; a control is added only once it can be defined provider-neutrally and enforced honestly by both tool registration and provider execution.
+**The search schema is deliberately thin.** `allowed_domains` is the one promoted search control because DeepSeek, Exa, and Perplexity can map it natively and the seam can reject nonconforming structured sources. Other useful provider controls remain absent until they can be defined provider-neutrally and enforced honestly by tool registration, provider execution, and the seam.
+
+**A domain allowlist is a hard structured-result contract, not a freshness guarantee.** It requests a provider-side restriction and constrains the returned structured source URLs through seam validation. It does not prove that every internal retrieval candidate or generated prose used only allowed evidence, make provider-supplied dates comparable, or prove that a claim is current, so freshness still depends on a date-bearing query and evidence-aware prompt guidance.
 
 **Perplexity citations can be sparse.** A citation may be only a URL. Making `title` and `snippet` optional keeps the seam truthful but means `tool-web` renders fallback labels.
 
@@ -328,7 +338,7 @@ Rejected for the seam. `prompt` turns fetch into LLM summarization and couples p
 - A `pdf` `WebFetchBody` kind: the `http` provider decodes text-extractable PDFs (best-effort, capped, `truncated`) into a `{ kind: 'pdf'; content; pageCount? }` arm, and `tool-web` renders it. This is fetch, not `web_extract` — PDF retrieval is a concrete HTTP 200 plus deterministic local decoding, not provider-side extraction of a non-HTTP resource. Adding it is a coordinated change across `dsh-web` (declare the arm), the provider (decode + narrow "binary rejection" to "reject binary except text-extractable PDF"; scanned/image PDFs needing OCR stay out of scope), and `tool-web` (render). The closed `WebFetchBody` union makes the consumer side fail to compile until the new arm is handled.
 - Provider-backed extraction as a separate `web_extract` capability, rather than widening `web_fetch` silently.
 - Permission policy integration: the permission system now exists ([sandbox and approval](../feature/2026-07-06-sandbox.md), [web permission presets](../feature/2026-07-23-web-permission-and-approval.md)) but bundles only sandbox mode and approval policy; web permission policy remains unintegrated.
-- Provider-neutral search controls beyond `query` and `maxResults`, once Exa and Perplexity can both honor them honestly.
+- Provider-neutral search controls beyond `query`, `allowedDomains`, and `maxResults`, such as recency or domain blocklists, once every selected provider and the seam can honor them honestly.
 
 ## Open questions
 

@@ -38,7 +38,7 @@ The entry above is the base layer of the `web-search-deepseek` Settings section:
 
 ## Mapping
 
-DeepSeek returns no provider-generated answer content this provider trusts as `content`, so `content` is omitted. `sources[]` comes from `web_search_result` items inside `web_search_tool_result` blocks: `url` ← `url`, `title` ← `title`, and `publishedAt` ← `page_age`. Snippets live separately as URL-keyed `cited_text` entries in a text block's `citations[]`; the provider joins them, leaving `snippet` absent when no excerpt exists.
+DeepSeek returns no provider-generated answer content this provider trusts as `content`, so `content` is omitted. `sources[]` comes from `web_search_result` items inside `web_search_tool_result` blocks: `url` ← `url`, `title` ← `title`, and `publishedAt` ← `page_age`. `page_age` is a provider-supplied last-update label and is not guaranteed ISO-8601. Snippets live separately as URL-keyed `cited_text` entries in a text block's `citations[]`; the provider joins them, leaving `snippet` absent when no excerpt exists.
 
 Results are deduplicated by URL because one request may surface the same page across searches. DeepSeek exposes `maxUses`, not a result-count knob, so the seam enforces `maxResults` by truncating `sources[]` and setting `truncated`.
 
@@ -54,7 +54,16 @@ Immediately before dispatch, a search running under an initiating Agent appends 
 
 #### What the model sees
 
-A separate DeepSeek model receives exactly `Perform a web search for the query: <query>` as its user text and one native `web_search` server-tool definition. This request is not part of the conversation model's context.
+A separate DeepSeek model receives the following four-line instruction. It also receives one native `web_search` server-tool definition; when the seam request carries `allowedDomains`, that tool receives the same list as `allowed_domains`. This auxiliary request is not part of the conversation model's context, so the outer query must carry any absolute date the search needs.
+
+##### Verbatim instruction
+
+```markdown
+Search the live web and answer this exact query: <query>
+When the query explicitly says "as of" a date, treat that date as the cutoff. Prefer current first-party or benchmark-owner evidence.
+For current, latest, or as-of version and benchmark comparisons, verify that every item is the current version for the requested date. Do not substitute an older version when the current one cannot be verified.
+After searching, answer the query and cite every factual claim so the response contains citation excerpts for the caller. State any unresolved gap explicitly.
+```
 
 #### Token effect
 
@@ -68,7 +77,7 @@ Independent of the conversation request cache. The auxiliary instruction and nat
 
 #### What the model sees
 
-Through [`dsh-tool-web`](../tool-web/README.md), the conversation model sees deduplicated URLs, titles, dates, and citation snippets from structured search blocks; provider prose is not trusted as an answer. This provider's exact failures include the actionable missing-credential message, `DeepSeek search credential resolution failed: <error>`, `DeepSeek search aborted`, `DeepSeek search request failed: <error>`, `DeepSeek returned no web_search_tool_result blocks; the request may not have triggered native web search`, and `DeepSeek returned an unprocessable response body: <error>`; HTTP failures preserve the provider message. The consumer owns the error wrapper.
+Through [`dsh-tool-web`](../tool-web/README.md), the conversation model sees deduplicated URLs, titles, provider date/page-age labels, and citation snippets from structured search blocks; provider prose is not trusted as an answer. This provider's exact failures include the actionable missing-credential message, `DeepSeek search credential resolution failed: <error>`, `DeepSeek search aborted`, `DeepSeek search request failed: <error>`, `DeepSeek returned no web_search_tool_result blocks; the request may not have triggered native web search`, and `DeepSeek returned an unprocessable response body: <error>`; HTTP failures preserve the provider message. The consumer owns the error wrapper.
 
 #### Token effect
 
@@ -84,3 +93,4 @@ Append-only; newly visible content follows the reusable request prefix and does 
 - **Dynamic credential availability resolves inside the operation** — the synchronous `available()` contract can establish that a resolver exists but cannot query an asynchronous credential store. A selected keyless provider therefore fails the search with `WEB_PROVIDER_CREDENTIAL_MISSING`; the stable `web_search` schema remains registered. Caller cancellation races this preflight locally, but cannot force an arbitrary credential backend itself to stop work.
 - **Over-returned sources still cost tokens** — with no result-count knob on the wire, `maxResults` is enforced only post-hoc by seam truncation.
 - **Uncited results carry no `snippet`** — a source gains one only when a `text` block citation (`cited_text`) matches its URL.
+- **Temporal instructions improve planning but do not create a freshness guarantee** — the provider has no portable publication-date filter, and `page_age` is not a comparable timestamp. The conversation model must still use an absolute-date query and verify current versions from returned evidence.

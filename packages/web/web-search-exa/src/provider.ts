@@ -111,6 +111,7 @@ export class ExaSearchProvider implements WebSearchProvider {
           query: request.query,
           type: this.options.searchType,
           contents: { highlights: { highlightsPerUrl: this.options.highlightsPerResult } },
+          ...request.allowedDomains !== undefined ? { includeDomains: request.allowedDomains } : {},
           ...numResults !== undefined ? { numResults } : {},
         }),
         ...signal !== undefined ? { signal } : {},

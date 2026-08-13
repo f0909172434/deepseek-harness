@@ -21,7 +21,7 @@
 | 成员 | 语义 |
 |---|---|
 | `registerSearchProvider(provider)`／`registerFetchProvider(provider)` | 注册后端。同一能力类型下 id 重复时抛出 `WebError` `WEB_DUPLICATE_PROVIDER`。返回 disposer。随调用 fiber 一并 dispose（资源释放）。 |
-| `search(request, signal?)` | 解析搜索提供方并运行一次搜索。在结果上强制执行 `request.maxResults`（截断 `sources[]`，设置 `truncated`）。能力无法运行时抛出 `WebError`。 |
+| `search(request, signal?)` | 解析搜索提供方并运行一次搜索。规范化 `allowedDomains`，要求每个返回源都满足它，再强制执行 `request.maxResults`。无效过滤条件以 `WEB_INVALID_SEARCH_FILTER` 失败；提供方越界以 `WEB_SEARCH_FILTER_VIOLATION` 失败。 |
 | `fetch(request, signal?)` | 解析抓取提供方并获取一个 URL。非 2xx 响应是结果，不会抛出异常。无法安全获取或表示资源时抛出 `WebError`。 |
 
 提供方注册的是**能力**而非工具。`dsh-tool-web` 是面向模型的名称、描述、提示词指引、JSON Schema 和呈现的唯一归属方。
@@ -43,7 +43,7 @@
 
 ## 词汇
 
-`WebSearchRequest`（`query`、`maxResults?`）→ `WebSearchResult`（`content?`、`sources[]`、`truncated`）；每个 `WebSearchSource` 都有必填 `url` 与可选 `title`／`snippet`／`publishedAt`（Perplexity 引用可能只含 URL）。`WebFetchRequest`（`url`）→ `WebFetchResult`（最终 `url`、`statusCode`、`body`、`truncated`）；取消作为可选的直接 `AbortSignal` 参数传给 `search()`／`fetch()`。`WebFetchBody` 是这里拥有的封闭判别联合（`html` | `text`）；消费方使用 `switch` 实现穷尽检查，因此新增类型会导致编译失败，直到处理完毕。完整约定见 `src/types.ts`，其中也包含 `WebError` code 分类体系。
+`WebSearchRequest`（`query`、`allowedDomains?`、`maxResults?`）→ `WebSearchResult`（`content?`、`sources[]`、`truncated`）。`allowedDomains` 是提供方无关的允许列表，最多 20 个 ASCII 主机名；精确主机及其子域名均匹配。seam 在发出请求前规范化该列表，并在应用结果上限前验证每个返回 URL。每个 `WebSearchSource` 都有必填 `url` 与可选 `title`／`snippet`／`publishedAt`；`publishedAt` 是提供方给出的发布时间、抓取时间或页面年龄标签，不保证是 ISO-8601，也不可假定可跨提供方比较。`WebFetchRequest`（`url`）→ `WebFetchResult`（最终 `url`、`statusCode`、`body`、`truncated`）；取消作为可选的直接 `AbortSignal` 参数传给 `search()`／`fetch()`。`WebFetchBody` 是这里拥有的封闭判别联合（`html` | `text`）；消费方使用 `switch` 实现穷尽检查，因此新增类型会导致编译失败，直到处理完毕。完整约定见 `src/types.ts`，其中也包含 `WebError` code 分类体系。
 
 ## 模型体验
 
@@ -56,6 +56,6 @@
 ## 已知限制与暂缓事项
 
 - **没有观测接口**：没有提供方变更事件或能力状态查询；可用性只能通过执行 `search()`／`fetch()` 并按抛出的 `WebError` code 路由来观测，无提供方失败是通用的 `WEB_PROVIDER_UNAVAILABLE`，不会枚举逐提供方原因（见 [Agent Note](../../../.agents/notes/archived/simplification/2026-07-04-drop-unconsumed-web-observation-surface.md)）。
-- **`WebSearchRequest` 只携带 `query` + `maxResults`**：提供方无关的控制项（新近程度、域名过滤条件、区域提示、搜索深度）暂缓至 Exa 与 Perplexity 都能诚实支持时（见 [seam Agent Note](../../../.agents/notes/implemented/architecture/2026-06-24-web-capability-seam.md)）。
+- **其他提供方无关搜索控制仍暂缓**：来源允许列表具有可移植语义且由 seam 验证；新近程度、区域、搜索深度与域名阻止列表仍不提供，直到每个已选提供方都能诚实执行同一语义（见 [seam Agent Note](../../../.agents/notes/implemented/architecture/2026-06-24-web-capability-seam.md)）。
 - **`WebFetchBody` 没有 `pdf` 分支**：可提取文本的 PDF 支持属于明确的暂缓工作；封闭联合会使新增该分支成为三个 web 包中由编译强制执行的变更。
 - **提供方支持的页面提取不属于 `fetch()` 范围**：Firecrawl/Tavily 风格的 `web_extract` 能力暂缓，而不会扩展抓取操作。

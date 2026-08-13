@@ -23,7 +23,14 @@ const FIXTURE = fileURLToPath(new URL('./snapshots/web-search-round/session.json
 const UI_EXPECTED = fileURLToPath(new URL('./snapshots/web-search-round/ui.expected.md', import.meta.url))
 const MODE = webSnapshotMode()
 const QUERY = 'DeepSeek Harness snapshot search'
-const PROMPT = `Use web_search to search exactly "${QUERY}". Then reply exactly SEARCH_DONE and stop.`
+const ALLOWED_DOMAIN = 'docs.example.test'
+const PROMPT = `Use web_search to search exactly "${QUERY}" with allowed_domains exactly ["${ALLOWED_DOMAIN}"]. Then reply exactly SEARCH_DONE and stop.`
+const AUXILIARY_SEARCH_INSTRUCTION = [
+  `Search the live web and answer this exact query: ${QUERY}`,
+  'When the query explicitly says "as of" a date, treat that date as the cutoff. Prefer current first-party or benchmark-owner evidence.',
+  'For current, latest, or as-of version and benchmark comparisons, verify that every item is the current version for the requested date. Do not substitute an older version when the current one cannot be verified.',
+  'After searching, answer the query and cite every factual claim so the response contains citation excerpts for the caller. State any unresolved gap explicitly.',
+].join('\n')
 const SEARCH_CREDENTIAL_REF = credentialRef('DSH_WEB_SEARCH_E2E_KEY')
 const SEARCH_CREDENTIAL = 'snapshot-search-key'
 
@@ -180,9 +187,16 @@ describe('web e2e: shipped default web search', () => {
       body: {
         messages: [{
           role: 'user',
-          content: [{ type: 'text', text: `Perform a web search for the query: ${QUERY}` }],
+          content: [{
+            type: 'text',
+            text: AUXILIARY_SEARCH_INSTRUCTION,
+          }],
         }],
-        tools: [{ type: 'web_search_20250305', name: 'web_search' }],
+        tools: [{
+          type: 'web_search_20250305',
+          name: 'web_search',
+          allowed_domains: [ALLOWED_DOMAIN],
+        }],
       },
     })
 
@@ -201,6 +215,10 @@ describe('web e2e: shipped default web search', () => {
         event.type === 'tool/call' && event.data.name === 'web_search',
     )
     if (searchCall === undefined) throw new Error('the replayed turn did not call web_search')
+    expect(JSON.parse(searchCall.data.arguments) as unknown).toEqual({
+      query: QUERY,
+      allowed_domains: [ALLOWED_DOMAIN],
+    })
     const searchResult = sessionEvents.find(
       (event): event is Extract<SessionEvent, { type: 'tool/result' }> =>
         event.type === 'tool/result' && event.data.message.source.callId === searchCall.data.callId,

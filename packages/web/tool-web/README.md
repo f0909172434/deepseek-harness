@@ -10,7 +10,7 @@ Each tool is registered independently; a product that wants only one disables th
 
 | Tool | Args | Behavior |
 |---|---|---|
-| `web_search` | `query` (string) | Discovery. Returns an optional answer plus source URLs. `max_results` is **not** model-facing — the tool sets the bound (the `searchMaxResults` config, default 8) and passes it to the seam. |
+| `web_search` | `query` (string), `allowed_domains?` (string[]) | Live discovery. `allowed_domains` sends an allowlist of at most 20 ASCII hostnames to the selected provider and requires every returned structured source to match one of those hostnames or its subdomains. `max_results` is **not** model-facing — the tool sets the bound (the `searchMaxResults` config, default 8) and passes it to the seam. |
 | `web_fetch` | `url` (string) | Retrieves a specific URL. HTML bodies are rendered to markdown (turndown with GFM tables/strikethrough); text bodies pass through. A non-2xx status is reported, not an error. The tool-call timeout is deployment policy (`dsh-tool-call-timeout-policy`), not a model argument. |
 
 Both tools opt into concurrent scheduling because provider reads return content without mutating parent-agent state.
@@ -52,13 +52,13 @@ Search and fetch contribute the web-search and web-fetch guidance below. Search 
 ##### Web search guidance with fetch enabled
 
 ```markdown
-Use the web_search tool to discover current information on the web. It returns an optional answer plus a list of source URLs. Follow up with web_fetch when you need the full content of a specific result, and cite the relevant URLs as markdown links.
+Use the web_search tool to discover current information on the web. It returns an optional answer plus a list of source URLs. Follow up with web_fetch when you need the full content of a specific result. For current, latest, today, version, price, benchmark, or as-of claims, you must search before answering, include the absolute date in the query, and verify that every compared item is the current version for the requested date. Use allowed_domains for a first-party verification pass and a separate unrestricted search for independent comparisons. Never substitute an older version when the current one cannot be verified; state the unresolved gap. When a result has no snippet, lower confidence and disclose that no supporting excerpt was returned. Cite the relevant URLs as markdown links.
 ```
 
 ##### Web search-only guidance
 
 ```markdown
-Use the web_search tool to discover current information on the web. It returns an optional answer plus a list of source URLs. Use the returned source snippets when available, and cite the relevant URLs as markdown links.
+Use the web_search tool to discover current information on the web. It returns an optional answer plus a list of source URLs. Use the returned source snippets when available. For current, latest, today, version, price, benchmark, or as-of claims, you must search before answering, include the absolute date in the query, and verify that every compared item is the current version for the requested date. Use allowed_domains for a first-party verification pass and a separate unrestricted search for independent comparisons. Never substitute an older version when the current one cannot be verified; state the unresolved gap. When a result has no snippet, lower confidence and disclose that no supporting excerpt was returned. Cite the relevant URLs as markdown links.
 ```
 
 ##### Web fetch guidance
@@ -121,7 +121,7 @@ Append-only; newly visible content follows the reusable request prefix and does 
 
 #### What the model sees
 
-Blank inputs become exactly `Error: query must be a non-empty string` or `Error: url must be a non-empty string`.
+Blank inputs become exactly `Error: query must be a non-empty string` or `Error: url must be a non-empty string`. An invalid `allowed_domains` list fails before provider dispatch with `WEB_INVALID_SEARCH_FILTER`; if a provider returns any source outside the normalized allowlist, the call fails with `WEB_SEARCH_FILTER_VIOLATION` instead of silently presenting mixed-scope evidence.
 
 #### Token effect
 
@@ -134,5 +134,5 @@ Append-only; newly visible content follows the reusable request prefix and does 
 ## Known Limitations and Deferred Work
 
 - **HTML→markdown conversion degrades on inputs GFM cannot safely represent** — [turndown](https://github.com/mixmark-io/turndown) (with GFM tables/strikethrough) converts at most `fetchMaxOutputChars` source characters through a real DOM. A conservative 512-level lexical guard passes deeply or ambiguously nested bodies through as raw HTML, conversion exceptions do the same, and table `colspan` is ignored because GFM has no spanning-cell representation; these bounds avoid blocking the event loop or expanding output from an untrusted numeric attribute ([archived dependency decision](../../../.agents/notes/archived/simplification/2026-07-26-turndown-for-tool-web-html-markdown.md)).
-- **The model-facing API is minimal by design, with promotions deferred** — `max_results` stays a config bound (not a model argument), and `web_fetch` takes only `url` (no `format`/`prompt`/LLM-summarization mode); both are named later steps in [the seam Agent Note](../../../.agents/notes/implemented/architecture/2026-06-24-web-capability-seam.md).
+- **The model-facing API is minimal by design** — `allowed_domains` is the one promoted portable search control; `max_results` stays a config bound, and `web_fetch` takes only `url` (no `format`/`prompt`/LLM-summarization mode). Other search controls remain named later steps in [the seam Agent Note](../../../.agents/notes/implemented/architecture/2026-06-24-web-capability-seam.md).
 - **No web-specific permission policy** — both tools execute without requesting `ctx.approval`; a deployment that needs confirmation must add a `tools/pre-execute` policy, and the package does not define persistent URL/domain grants.

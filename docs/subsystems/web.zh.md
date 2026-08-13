@@ -12,16 +12,19 @@ Web 访问 seam 是一个[能力 seam](../../.agents/notes/implemented/architect
 
 ## 搜索请求与结果
 
-面向模型的工具参数仅为一个 `query`；`maxResults` 是消费方自有的上限（`dsh-tool-web` 的 `searchMaxResults` 配置，默认 `8`），通过 seam 传递并在返回时强制执行——如果提供方返回超量，seam 截断 `sources[]` 并设置 `truncated`。
+面向模型的工具接受必填的 `query` 和可选的 `allowed_domains` 允许列表。若提供 `allowed_domains`，其中必须包含 1–20 个纯 ASCII 主机名：不能含协议、路径、凭证、端口、通配符、IP 字面量、首尾空白或单标签主机名。一个条目会匹配该精确主机名及其子域名。`dsh-tool-web` 将其映射为可移植的 `allowedDomains` 字段；`maxResults` 仍是消费方自有的上限（`searchMaxResults`，默认 `8`），而不是模型参数。
 
 ```ts type-equiv
 /**
- * What one search-capable backend can return. The model-facing argument is just
- * a query; `maxResults` is a `dsh-tool-web`-layer bound passed through unchanged
- * and enforced on the way back by the seam (see {@link WebSearchResult}).
+ * What one search-capable backend is asked to retrieve. `allowedDomains` has
+ * provider-neutral allowlist semantics; `maxResults` is a `dsh-tool-web`-layer
+ * bound passed through unchanged and enforced on the way back by the seam (see
+ * {@link WebSearchResult}).
  */
 interface WebSearchRequest {
   readonly query: string
+  /** ASCII hostnames whose exact host and subdomains may appear in results. */
+  readonly allowedDomains?: readonly string[]
   /**
    * Upper bound on returned sources; the seam truncates to it. Omitted = no
    * bound. `dsh-tool-web` always sets it. A provider whose API supports a
@@ -62,10 +65,14 @@ interface WebSearchSource {
   readonly url: string
   readonly title?: string
   readonly snippet?: string
-  /** Publication/crawl timestamp as a provider-supplied ISO-8601 string. */
+  /** Provider-supplied publication, crawl, or page-age label; format varies. */
   readonly publishedAt?: string
 }
 ```
+
+seam 会将 `allowedDomains` 转换为小写，按首次出现顺序合并完全重复的条目，并在向提供方发出请求前拒绝无效或空列表。每个提供方都通过自身的原生请求字段接收同一个可移植限制：DeepSeek 的 `web_search_20250305.allowed_domains`、Exa 的 `includeDomains` 或 Perplexity 的 `search_domain_filter`。提供方返回后，seam 会在应用 `maxResults` 之前要求每个结构化来源都使用 HTTP(S) 且匹配允许列表；只要有一个违规来源，整次搜索就会失败，而不会静默删除该来源，因为提供方生成的 `content` 可能已经引用它。允许列表限制的是来源范围，而不是发布时间的新近程度，因此单凭该列表无法证明可变声明仍然是最新事实。
+
+`publishedAt` 是不解析的提供方标签：Exa 映射 `publishedDate`，Perplexity 映射 `date`，DeepSeek 映射 `page_age`。它可能表示发布时间、抓取时间、最后更新时间或页面年龄；不保证为 ISO-8601，也不保证可在提供方之间比较，因此消费方不得仅依赖该字段作为新近程度保证。
 
 ## 抓取请求与结果
 
@@ -125,11 +132,11 @@ type WebFetchBody =
 
 ## 错误
 
-`WebError extends HarnessError`（[core.md](core.md) 错误分类体系），带有 `code: string`（开放式，与其他 seam 的错误一致——`LlmError`、`SubagentError`），而非封闭联合类型：提供方可以在不修改 `dsh-web` 的情况下抛出自己的错误代码，消费方必须容忍未知错误代码。错误代码按所有者划分。共享的 `WebRuntime` 约定会抛出与 seam 无关的错误代码：`WEB_PROVIDER_UNAVAILABLE`、`WEB_PROVIDER_CONFIGURED_MISSING`、`WEB_PROVIDER_CONFIGURED_UNAVAILABLE`、`WEB_PROVIDER_AMBIGUOUS`、`WEB_DUPLICATE_PROVIDER`（注册时的编程错误，类似 `LlmRuntime` 的 `DUPLICATE_ADAPTER`）、`WEB_ABORTED`，以及 `WEB_PROVIDER_ERROR`（提供方自身故障经 seam 暴露时使用的兜底代码，包括 DNS、连接被拒绝、TLS 等网络或传输故障）。抓取传输层错误代码由 `dsh-web-fetch-http` 实现拥有，不同的抓取后端无需抛出它们：`WEB_INVALID_URL`、`WEB_BLOCKED_URL`、`WEB_REDIRECT_BLOCKED`、`WEB_FETCH_TOO_LARGE`、`WEB_FETCH_TIMEOUT`、`WEB_UNSUPPORTED_CONTENT_TYPE`。
+`WebError extends HarnessError`（[core.md](core.md) 错误分类体系），带有 `code: string`（开放式，与其他 seam 的错误一致——`LlmError`、`SubagentError`），而非封闭联合类型：提供方可以在不修改 `dsh-web` 的情况下抛出自己的错误代码，消费方必须容忍未知错误代码。错误代码按所有者划分。共享的 `WebRuntime` 错误代码包括 `WEB_PROVIDER_UNAVAILABLE`、`WEB_PROVIDER_CONFIGURED_MISSING`、`WEB_PROVIDER_CONFIGURED_UNAVAILABLE`、`WEB_PROVIDER_AMBIGUOUS`、`WEB_DUPLICATE_PROVIDER`（注册时的编程错误，类似 `LlmRuntime` 的 `DUPLICATE_ADAPTER`）、`WEB_INVALID_SEARCH_FILTER`（可移植允许列表无效）以及 `WEB_SEARCH_FILTER_VIOLATION`（返回的结构化来源不在该允许列表内）。`WEB_ABORTED` 和 `WEB_PROVIDER_ERROR` 用于暴露提供方执行故障；后者包括 DNS、连接被拒绝、TLS 等网络或传输故障。抓取传输层错误代码由 `dsh-web-fetch-http` 实现拥有，不同的抓取后端无需抛出它们：`WEB_INVALID_URL`、`WEB_BLOCKED_URL`、`WEB_REDIRECT_BLOCKED`、`WEB_FETCH_TOO_LARGE`、`WEB_FETCH_TIMEOUT`、`WEB_UNSUPPORTED_CONTENT_TYPE`。
 
 ## 服务
 
-`WebRuntime` 注册搜索与抓取提供方，以 `WEB_DUPLICATE_PROVIDER` 拒绝重复 id，并在执行时以结构化的选择错误解析提供方。本地抓取后端仅接受 HTTP(S)、拒绝凭证、限制重定向次数、字节数、字符数和时间、对每一次同源重定向跳转重新进行安全校验，并解码正文；展示由工具负责。本地后端不会拦截私有网络目标；在能够触及敏感内部目标的环境中，禁止启用 `web_fetch`。
+`WebRuntime` 注册搜索与抓取提供方，以 `WEB_DUPLICATE_PROVIDER` 拒绝重复 id，并在执行时以结构化的选择错误解析提供方。搜索会规范化来源允许列表并将其发送给提供方，对每个返回的结构化来源强制执行该列表，然后才应用来源数量上限。本地抓取后端仅接受 HTTP(S)、拒绝凭证、限制重定向次数、字节数、字符数和时间、对每一次同源重定向跳转重新进行安全校验，并解码正文；展示由工具负责。本地后端不会拦截私有网络目标；在能够触及敏感内部目标的环境中，禁止启用 `web_fetch`。
 
 <!-- BEGIN GENERATED cordis-surface (gen-cordis-catalog.ts) — do not edit between markers -->
 
@@ -176,9 +183,11 @@ registerFetchProvider(provider: WebFetchProvider): () => void
 /**
  * Run one search through the selected provider. Resolves the provider at call
  * time with the selection rules above; throws {@link WebError} when the
- * capability cannot run. The seam enforces `request.maxResults` on the result:
- * if the provider over-returns, `sources[]` is truncated and `truncated` set.
- * @param request - the query and optional result limit.
+ * capability cannot run. The seam defensively enforces
+ * `request.allowedDomains` after the provider returns, then enforces
+ * `request.maxResults`: if the provider over-returns, `sources[]` is truncated
+ * and `truncated` set.
+ * @param request - the query, optional domain allowlist, and result limit.
  * @param signal - optional cancellation signal forwarded to the provider.
  * @returns the provider's results, capped to `request.maxResults`.
  */

@@ -5,7 +5,7 @@ import { CallId } from '@deepseek-ai/dsh-llm'
 import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
 import ToolRuntime, { type ToolExecutionResult } from '@deepseek-ai/dsh-tools'
 import WebRuntime from '@deepseek-ai/dsh-web'
-import type { WebSearchProvider, WebSearchResult } from '@deepseek-ai/dsh-web'
+import type { WebSearchProvider, WebSearchRequest, WebSearchResult } from '@deepseek-ai/dsh-web'
 import * as ToolWeb from '@deepseek-ai/dsh-tool-web'
 import {
   formatSearchOutput,
@@ -87,6 +87,11 @@ describe('search formatting', () => {
   it('validates the query', () => {
     expect(() => parseSearchArgs({ query: '   ' })).toThrow('non-empty')
     expect(parseSearchArgs({ query: 'hi' })).toEqual({ query: 'hi' })
+  })
+
+  it('maps the source-domain allowlist to the seam field', () => {
+    expect(parseSearchArgs({ query: 'hi', allowed_domains: ['DeepSeek.COM', 'deepseek.com'] }))
+      .toEqual({ query: 'hi', allowedDomains: ['DeepSeek.COM', 'deepseek.com'] })
   })
 
   it('falls back to the raw URL as a source label when the URL is unparseable', () => {
@@ -483,7 +488,8 @@ describe('tool-web registration', () => {
     const { fiber, ctx } = await mountTools()
     const prompt = await ctx.systemPrompt.assemble()
     const text = prompt.sections.map(s => s.text).join('\n')
-    expect(text).toContain('Use the web_search tool to discover current information on the web. It returns an optional answer plus a list of source URLs. Follow up with web_fetch when you need the full content of a specific result, and cite the relevant URLs as markdown links.')
+    expect(text).toContain('For current, latest, today, version, price, benchmark, or as-of claims, you must search before answering')
+    expect(text).toContain('Use allowed_domains for a first-party verification pass')
     expect(text).toContain('Use the web_fetch tool to retrieve the content of a specific HTTP(S) URL')
     await fiber.dispose()
   })
@@ -566,6 +572,31 @@ describe('tool-web execution through the real registry', () => {
     const out = await call('web_search', { query: 123 })
     expect(out.isError).toBe(true)
     expect(out.error?.info?.code).toBe('INVALID_ARGS')
+    await fiber.dispose()
+  })
+
+  it('forwards allowed_domains to the seam as normalized allowedDomains', async () => {
+    let seen: WebSearchRequest | undefined
+    const provider: WebSearchProvider = {
+      id: 'stub-search',
+      available: () => available,
+      search: (request) => { seen = request; return Promise.resolve({ sources: [], truncated: false }) },
+    }
+    const { fiber, call } = await mountTools({ webConfig: { searchProvider: 'stub-search' }, search: provider })
+    const out = await call('web_search', { query: 'q', allowed_domains: ['DeepSeek.COM'] })
+    expect(out.isError).toBe(false)
+    expect(seen).toEqual({ query: 'q', allowedDomains: ['deepseek.com'], maxResults: WEB_SEARCH_MAX_RESULTS })
+    await fiber.dispose()
+  })
+
+  it('rejects malformed allowed_domains before provider dispatch', async () => {
+    const search = vi.fn(async () => ({ sources: [], truncated: false }))
+    const provider: WebSearchProvider = { id: 'stub-search', available: () => available, search }
+    const { fiber, call } = await mountTools({ webConfig: { searchProvider: 'stub-search' }, search: provider })
+    const out = await call('web_search', { query: 'q', allowed_domains: ['https://deepseek.com'] })
+    expect(out.isError).toBe(true)
+    expect(out.error?.info?.code).toBe('WEB_INVALID_SEARCH_FILTER')
+    expect(search).not.toHaveBeenCalled()
     await fiber.dispose()
   })
 

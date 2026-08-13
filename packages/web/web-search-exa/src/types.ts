@@ -10,6 +10,8 @@
 /** Request body sent to Exa's search endpoint. */
 export interface ExaSearchRequest {
   query: string
+  /** Request provider-side restriction to these hostnames. */
+  includeDomains?: readonly string[]
   /** Retrieval mode: keyword, neural (embeddings), or auto (Exa decides). */
   type: 'auto' | 'keyword' | 'neural'
   /** Exa's result-count control; the seam still enforces the bound on return. */

@@ -1851,7 +1851,7 @@ Source: [`packages/web/tool-web/src/index.ts`](../packages/web/tool-web/src/inde
 
 ### `web_search`
 
-Search the web for current information. Returns an optional summary answer and a list of source URLs.
+Search the live web. Required for mutable current/latest/as-of facts. Supports an optional source-domain allowlist.
 
 ```json
 {
@@ -1860,6 +1860,13 @@ Search the web for current information. Returns an optional summary answer and a
     "query": {
       "type": "string",
       "description": "The search query."
+    },
+    "allowed_domains": {
+      "type": "array",
+      "description": "Optional allowlist of up to 20 ASCII hostnames, without scheme or path. Exact hosts and their subdomains are allowed.",
+      "items": {
+        "type": "string"
+      }
     }
   },
   "required": [

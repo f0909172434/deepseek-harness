@@ -10,7 +10,7 @@
 
 | 工具 | 参数 | 行为 |
 |---|---|---|
-| `web_search` | `query`（string） | 用于发现信息。返回可选答案与来源 URL。`max_results` **不**面向模型：工具设置上限（`searchMaxResults` 配置，默认 8）并传给 seam。 |
+| `web_search` | `query`（string）、`allowed_domains?`（string[]） | 用于实时发现信息。`allowed_domains` 会把最多 20 个 ASCII 主机名的允许列表发送给所选提供方，并要求每个返回的结构化来源都匹配其中一个主机名或其子域名。`max_results` **不**面向模型：工具设置上限（`searchMaxResults` 配置，默认 8）并传给 seam。 |
 | `web_fetch` | `url`（string） | 获取特定 URL。HTML 主体渲染为 markdown（turndown，带 GFM 表格／删除线）；文本主体原样通过。非 2xx 状态会报告，而非报错。工具调用超时是部署策略（`dsh-tool-call-timeout-policy`），不是模型参数。 |
 
 两个工具都选择并发调度，因为提供方读取会返回内容，不会修改父 agent（智能体）的状态。
@@ -52,13 +52,13 @@
 ##### 启用抓取时的 Web 搜索指引
 
 ```markdown
-Use the web_search tool to discover current information on the web. It returns an optional answer plus a list of source URLs. Follow up with web_fetch when you need the full content of a specific result, and cite the relevant URLs as markdown links.
+Use the web_search tool to discover current information on the web. It returns an optional answer plus a list of source URLs. Follow up with web_fetch when you need the full content of a specific result. For current, latest, today, version, price, benchmark, or as-of claims, you must search before answering, include the absolute date in the query, and verify that every compared item is the current version for the requested date. Use allowed_domains for a first-party verification pass and a separate unrestricted search for independent comparisons. Never substitute an older version when the current one cannot be verified; state the unresolved gap. When a result has no snippet, lower confidence and disclose that no supporting excerpt was returned. Cite the relevant URLs as markdown links.
 ```
 
 ##### 仅搜索时的 Web 搜索指引
 
 ```markdown
-Use the web_search tool to discover current information on the web. It returns an optional answer plus a list of source URLs. Use the returned source snippets when available, and cite the relevant URLs as markdown links.
+Use the web_search tool to discover current information on the web. It returns an optional answer plus a list of source URLs. Use the returned source snippets when available. For current, latest, today, version, price, benchmark, or as-of claims, you must search before answering, include the absolute date in the query, and verify that every compared item is the current version for the requested date. Use allowed_domains for a first-party verification pass and a separate unrestricted search for independent comparisons. Never substitute an older version when the current one cannot be verified; state the unresolved gap. When a result has no snippet, lower confidence and disclose that no supporting excerpt was returned. Cite the relevant URLs as markdown links.
 ```
 
 ##### Web 抓取指引
@@ -121,7 +121,7 @@ Use the web_fetch tool to retrieve the content of a specific HTTP(S) URL (for ex
 
 #### 模型看到的内容
 
-空输入精确地变为 `Error: query must be a non-empty string` 或 `Error: url must be a non-empty string`。
+空输入精确地变为 `Error: query must be a non-empty string` 或 `Error: url must be a non-empty string`。无效的 `allowed_domains` 列表会在提供方发出请求前以 `WEB_INVALID_SEARCH_FILTER` 失败；若提供方返回任何不在规范化允许列表内的来源，调用会以 `WEB_SEARCH_FILTER_VIOLATION` 失败，而不会静默呈现混合范围的证据。
 
 #### Token 影响
 
@@ -134,5 +134,5 @@ Use the web_fetch tool to retrieve the content of a specific HTTP(S) URL (for ex
 ## 已知限制与暂缓事项
 
 - **HTML→markdown 转换会在 GFM 无法安全表示的输入上降级**：[turndown](https://github.com/mixmark-io/turndown)（带 GFM 表格／删除线）通过真实 DOM 转换至多 `fetchMaxOutputChars` 个源字符。保守的 512 层词法守卫会将深层或嵌套有歧义的主体作为原始 HTML 直接透传，转换异常也会如此处理；表格的 `colspan` 会被忽略，因为 GFM 无法表示跨列单元格。这些限制可避免阻塞事件循环，也避免不受信任的数值属性使输出膨胀（[已归档的依赖决策](../../../.agents/notes/archived/simplification/2026-07-26-turndown-for-tool-web-html-markdown.md)）。
-- **面向模型的接口有意保持精简，后续扩展暂缓**：`max_results` 保持为配置上限（不是模型参数），`web_fetch` 只接受 `url`（没有 `format`／`prompt`／LLM（大语言模型）摘要模式）；两项都列为 [seam Agent Note](../../../.agents/notes/implemented/architecture/2026-06-24-web-capability-seam.md) 中的后续步骤。
+- **面向模型的接口有意保持精简**：`allowed_domains` 是唯一已提升的可移植搜索控制；`max_results` 保持为配置上限，`web_fetch` 只接受 `url`（没有 `format`／`prompt`／LLM（大语言模型）摘要模式）。其他搜索控制仍列为 [seam Agent Note](../../../.agents/notes/implemented/architecture/2026-06-24-web-capability-seam.md) 中的后续步骤。
 - **没有 web 专用权限策略**：两个工具都不会请求 `ctx.approval` 就直接执行；需要确认的部署必须添加 `tools/pre-execute` 策略，该包不定义持久化的 URL／域名授权。

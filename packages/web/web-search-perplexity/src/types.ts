@@ -9,6 +9,8 @@
 export interface PerplexityRequest {
   model: string
   messages: { role: 'user'; content: string }[]
+  /** Provider-native domain allowlist. */
+  search_domain_filter?: readonly string[]
 }
 
 /** One structured search result (the preferred citation shape). */

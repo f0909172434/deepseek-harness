@@ -73,6 +73,7 @@ export interface DeepSeekSearchLlmRequest {
       readonly type: 'web_search_20250305'
       readonly name: 'web_search'
       readonly max_uses: number
+      readonly allowed_domains?: readonly string[]
     }]
   }
 }
@@ -173,6 +174,23 @@ export function mapAnthropicResponse(response: AnthropicResponse): WebSearchResu
   return { sources, truncated: false }
 }
 
+/**
+ * Build the auxiliary model instruction for one native-search turn. The outer
+ * agent supplies any absolute date in `request.query`; this separate Messages
+ * request does not inherit the outer conversation's system prompt.
+ *
+ * @param request - the portable search request.
+ * @returns the exact logged and transmitted instruction text.
+ */
+export function searchInstruction(request: WebSearchRequest): string {
+  return [
+    `Search the live web and answer this exact query: ${request.query}`,
+    'When the query explicitly says "as of" a date, treat that date as the cutoff. Prefer current first-party or benchmark-owner evidence.',
+    'For current, latest, or as-of version and benchmark comparisons, verify that every item is the current version for the requested date. Do not substitute an older version when the current one cannot be verified.',
+    'After searching, answer the query and cite every factual claim so the response contains citation excerpts for the caller. State any unresolved gap explicitly.',
+  ].join('\n')
+}
+
 /** The DeepSeek-backed search provider; HTTP redirects fail as `WEB_PROVIDER_ERROR`. */
 export class DeepSeekSearchProvider implements WebSearchProvider {
   readonly id = DEEPSEEK_PROVIDER_ID
@@ -207,9 +225,14 @@ export class DeepSeekSearchProvider implements WebSearchProvider {
       max_tokens: options.maxTokens,
       messages: [{
         role: 'user',
-        content: [{ type: 'text', text: `Perform a web search for the query: ${request.query}` }],
+        content: [{ type: 'text', text: searchInstruction(request) }],
       }],
-      tools: [{ type: 'web_search_20250305', name: 'web_search', max_uses: options.maxUses }],
+      tools: [{
+        type: 'web_search_20250305',
+        name: 'web_search',
+        max_uses: options.maxUses,
+        ...request.allowedDomains !== undefined ? { allowed_domains: request.allowedDomains } : {},
+      }],
     }
     options.recordRequest?.({
       endpoint,

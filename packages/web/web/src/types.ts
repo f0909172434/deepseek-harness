@@ -8,12 +8,15 @@
 import { HarnessError } from '@deepseek-ai/dsh-llm'
 
 /**
- * What one search-capable backend can return. The model-facing argument is just
- * a query; `maxResults` is a `dsh-tool-web`-layer bound passed through unchanged
- * and enforced on the way back by the seam (see {@link WebSearchResult}).
+ * What one search-capable backend is asked to retrieve. `allowedDomains` has
+ * provider-neutral allowlist semantics; `maxResults` is a `dsh-tool-web`-layer
+ * bound passed through unchanged and enforced on the way back by the seam (see
+ * {@link WebSearchResult}).
  */
 export interface WebSearchRequest {
   readonly query: string
+  /** ASCII hostnames whose exact host and subdomains may appear in results. */
+  readonly allowedDomains?: readonly string[]
   /**
    * Upper bound on returned sources; the seam truncates to it. Omitted = no
    * bound. `dsh-tool-web` always sets it. A provider whose API supports a
@@ -50,7 +53,7 @@ export interface WebSearchSource {
   readonly url: string
   readonly title?: string
   readonly snippet?: string
-  /** Publication/crawl timestamp as a provider-supplied ISO-8601 string. */
+  /** Provider-supplied publication, crawl, or page-age label; format varies. */
   readonly publishedAt?: string
 }
 
