@@ -32,6 +32,8 @@ env:
 
 jobs:
   preview:
+    # This optional upstream integration requires explicit configuration on a personal fork.
+    if: github.repository == 'deepseek-ai/deepseek-harness' || vars.DSH_ENABLE_CLOUDFLARE_PREVIEW == 'true'
     runs-on: ubuntu-24.04
     name: cloudflare pages preview
     steps:
