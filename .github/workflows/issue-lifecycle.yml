@@ -35,6 +35,8 @@ concurrency:
 
 jobs:
   lifecycle:
+    # This optional upstream integration requires explicit configuration on a personal fork.
+    if: vars.DSH_ISSUE_APP_CLIENT_ID != ''
     name: Issue lifecycle
     # Runs on every pull_request_review event so the check reports success rather
     # than a gray "skipped" segment. The token-creating and board-mutating steps

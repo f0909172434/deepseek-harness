@@ -13,6 +13,8 @@ permissions:
 
 jobs:
   policy:
+    # This optional upstream integration requires explicit configuration on a personal fork.
+    if: vars.DSH_ISSUE_APP_CLIENT_ID != ''
     name: Issue policy
     runs-on: ubuntu-latest
     steps:
